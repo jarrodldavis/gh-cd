@@ -2,7 +2,10 @@ module github.com/jarrodldavis/gh-cd
 
 go 1.21.0
 
-require github.com/cli/go-gh/v2 v2.2.0
+require (
+	github.com/cli/go-gh/v2 v2.2.0
+	github.com/google/go-cmp v0.5.9
+)
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
