@@ -7,7 +7,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-var diffOpts = cmp.AllowUnexported(parsed{})
+var diffOpts = cmp.AllowUnexported(parsed{}, url.Userinfo{})
 
 func assertParse(input string, want parsed) func(t *testing.T) {
 	return func(t *testing.T) {
@@ -33,7 +33,7 @@ func TestParseGitHubSyntax(t *testing.T) {
 
 	t.Run("HostOwnerName", assertParse("host.xz/owner/name", parsed{
 		local:  []string{"host.xz", "owner", "name"},
-		remote: &url.URL{Scheme: "https", Host: "host.xz", Path: "o/wner/name.git"},
+		remote: &url.URL{Scheme: "https", Host: "host.xz", Path: "/owner/name.git"},
 	}))
 }
 
