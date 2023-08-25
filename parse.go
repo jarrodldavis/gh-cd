@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+var acceptedSchemes = map[string]struct{}{
+	"ssh":   {},
+	"git":   {},
+	"http":  {},
+	"https": {},
+	"ftp":   {},
+	"ftps":  {},
+}
+
 type parsed struct {
 	local  []string
 	remote *url.URL
@@ -21,6 +30,6 @@ func (p parsed) String() string {
 	}
 }
 
-func parse(s string) (parsed, error) {
-	return parsed{}, nil
+func parse(s string) *parsed {
+	return &parsed{}
 }
