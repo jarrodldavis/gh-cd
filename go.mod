@@ -5,12 +5,14 @@ go 1.21.0
 require (
 	github.com/cli/go-gh/v2 v2.2.0
 	github.com/google/go-cmp v0.5.9
+	gopkg.in/h2non/gock.v1 v1.1.2
 )
 
 require (
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/cli/safeexec v1.0.1 // indirect
 	github.com/cli/shurcooL-graphql v0.0.3 // indirect
+	github.com/h2non/parth v0.0.0-20190131123155-b4df798d6542 // indirect
 	github.com/henvic/httpretty v0.1.2 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect

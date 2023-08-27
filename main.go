@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/cli/go-gh/v2/pkg/api"
 )
@@ -20,6 +21,14 @@ func main() {
 		return
 	}
 	fmt.Printf("running as %s\n", response.Login)
+
+	parsed := parse(os.Args[1])
+
+	if parsed == nil {
+		fmt.Printf("parsed=%v\n", parsed)
+	} else {
+		fmt.Printf("local=%#v, parsed=%#v\n", parsed.local, parsed.remote)
+	}
 }
 
 // For more examples of using go-gh, see:
