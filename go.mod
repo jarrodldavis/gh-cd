@@ -3,7 +3,7 @@ module github.com/jarrodldavis/gh-cd
 go 1.21.0
 
 require (
-	github.com/cli/go-gh/v2 v2.2.0
+	github.com/cli/go-gh/v2 v2.3.0
 	github.com/google/go-cmp v0.5.9
 	gopkg.in/h2non/gock.v1 v1.1.2
 )
