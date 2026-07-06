@@ -50,9 +50,17 @@ func normalize(remote *url.URL) *parsed {
 	path := remote.Path
 	path = strings.Trim(path, "/")
 	path = strings.TrimSuffix(path, ".git")
+	if remote.Hostname() == "" || path == "" {
+		return nil
+	}
 
 	remote.Path = "/" + path + ".git"
 	segments := strings.Split(path, "/")
+	for _, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." {
+			return nil
+		}
+	}
 
 	local := make([]string, 0, 1+len(segments))
 	local = append(local, remote.Hostname())
@@ -62,6 +70,10 @@ func normalize(remote *url.URL) *parsed {
 }
 
 func parse(s string) *parsed {
+	if s == "" {
+		return nil
+	}
+
 	if strings.Contains(s, "://") {
 		remote, err := url.ParseRequestURI(s)
 

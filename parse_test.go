@@ -24,6 +24,9 @@ func assertParse(input string, want parsed) func(t *testing.T) {
 func assertParseWithLogin(input string, want parsed) func(t *testing.T) {
 	assert := assertParse(input, want)
 	return func(t *testing.T) {
+		t.Setenv("GH_TOKEN", "test-token")
+		defer gock.Off()
+
 		gock.New("https://api.github.com/").
 			Get("/user").
 			Reply(200).
@@ -33,7 +36,6 @@ func assertParseWithLogin(input string, want parsed) func(t *testing.T) {
 
 		if gock.IsPending() {
 			t.Errorf("got %d pending mocks, want 0 pending mocks", len(gock.Pending()))
-			gock.Flush()
 		}
 	}
 }
@@ -238,4 +240,26 @@ func TestParseSCPSyntax(t *testing.T) {
 		local:  []string{"host.xz", "path", "to", "repo"},
 		remote: &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
 	}))
+}
+
+func TestParseInvalid(t *testing.T) {
+	tests := []string{
+		"",
+		":path/to/repo",
+		"host.xz:",
+		"@host.xz:path/to/repo",
+		"user@:path/to/repo",
+		"unknown://host.xz/path/to/repo",
+		"https://host.xz/",
+		"ssh://host.xz/path/../repo",
+		"file://host.xz/path/to/repo",
+	}
+
+	for _, input := range tests {
+		t.Run(input, func(t *testing.T) {
+			if got := parse(input); got != nil {
+				t.Fatalf("parse(%#v) = %s, want nil", input, got)
+			}
+		})
+	}
 }
