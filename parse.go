@@ -118,8 +118,11 @@ func parse(s string) *parsed {
 		}
 
 		repo.Name = strings.TrimSuffix(repo.Name, ".git")
-		path := "/" + repo.Owner + "/" + repo.Name + ".git"
-		remote := &url.URL{Scheme: "https", Host: repo.Host, Path: path}
+		path := repo.Owner + "/" + repo.Name
+		if strings.Count(s, "/") == 2 {
+			path = repo.Host + "/" + path
+		}
+		remote := &url.URL{Path: path}
 		local := []string{repo.Host, repo.Owner, repo.Name}
 		return &parsed{local, remote}
 	}

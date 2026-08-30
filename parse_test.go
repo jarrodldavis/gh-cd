@@ -43,32 +43,45 @@ func assertParseWithLogin(input string, want parsed) func(t *testing.T) {
 func TestParseGitHubSyntax(t *testing.T) {
 	t.Run("Name", assertParseWithLogin("name", parsed{
 		local:  []string{"github.com", "owner", "name"},
-		remote: &url.URL{Scheme: "https", Host: "github.com", Path: "/owner/name.git"},
+		remote: &url.URL{Path: "owner/name"},
 	}))
 
 	t.Run("NameSuffix", assertParseWithLogin("name.git", parsed{
 		local:  []string{"github.com", "owner", "name"},
-		remote: &url.URL{Scheme: "https", Host: "github.com", Path: "/owner/name.git"},
+		remote: &url.URL{Path: "owner/name"},
 	}))
 
 	t.Run("OwnerName", assertParse("owner/name", parsed{
 		local:  []string{"github.com", "owner", "name"},
-		remote: &url.URL{Scheme: "https", Host: "github.com", Path: "/owner/name.git"},
+		remote: &url.URL{Path: "owner/name"},
 	}))
 
 	t.Run("OwnerNameSuffix", assertParse("owner/name.git", parsed{
 		local:  []string{"github.com", "owner", "name"},
-		remote: &url.URL{Scheme: "https", Host: "github.com", Path: "/owner/name.git"},
+		remote: &url.URL{Path: "owner/name"},
+	}))
+
+	t.Run("OwnerNameDefaultHost", func(t *testing.T) {
+		t.Setenv("GH_HOST", "host.xz")
+		assertParse("owner/name", parsed{
+			local:  []string{"host.xz", "owner", "name"},
+			remote: &url.URL{Path: "owner/name"},
+		})(t)
+	})
+
+	t.Run("ExplicitGitHubHost", assertParse("github.com/owner/name", parsed{
+		local:  []string{"github.com", "owner", "name"},
+		remote: &url.URL{Path: "github.com/owner/name"},
 	}))
 
 	t.Run("HostOwnerName", assertParse("host.xz/owner/name", parsed{
 		local:  []string{"host.xz", "owner", "name"},
-		remote: &url.URL{Scheme: "https", Host: "host.xz", Path: "/owner/name.git"},
+		remote: &url.URL{Path: "host.xz/owner/name"},
 	}))
 
 	t.Run("HostOwnerNameSuffix", assertParse("host.xz/owner/name.git", parsed{
 		local:  []string{"host.xz", "owner", "name"},
-		remote: &url.URL{Scheme: "https", Host: "host.xz", Path: "/owner/name.git"},
+		remote: &url.URL{Path: "host.xz/owner/name"},
 	}))
 }
 

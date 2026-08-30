@@ -122,7 +122,7 @@ func TestCmdClonesMissingRepository(t *testing.T) {
 	wantCloneArgs := []string{
 		"repo",
 		"clone",
-		"https://github.com/owner/repo.git",
+		"owner/repo",
 		local,
 		"--no-upstream",
 		"--upstream-remote-name",
