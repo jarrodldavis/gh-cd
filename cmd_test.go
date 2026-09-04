@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -45,6 +47,10 @@ func installFakeGH(t *testing.T) string {
 printf '%s\n' "$@" > "$GH_CD_FAKE_ARGS"
 printf 'clone stdout\n'
 printf 'clone stderr\n' >&2
+if [ "${GH_CD_FAKE_EXIT:-0}" -eq 0 ]; then
+  git init -q "$4"
+  git -C "$4" remote add origin https://github.com/owner/repo.git
+fi
 exit "${GH_CD_FAKE_EXIT:-0}"
 `
 	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
@@ -76,6 +82,8 @@ func TestCmdPrintsExistingClone(t *testing.T) {
 	if err := os.MkdirAll(wantPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	runTestGit(t, wantPath, "init", "-q")
+	runTestGit(t, wantPath, "remote", "add", "origin", "https://github.com/owner/repo.git")
 
 	stdout, stderr, err := executeTestCmd(t, "owner/repo")
 	if err != nil {
@@ -87,6 +95,165 @@ func TestCmdPrintsExistingClone(t *testing.T) {
 	}
 	if stderr != "using existing clone: "+wantPath+"\n" {
 		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestAddReviewRefspecs(t *testing.T) {
+	repo := t.TempDir()
+	runTestGit(t, repo, "init", "-q")
+	runTestGit(t, repo, "remote", "add", "origin", "git@github.com:owner/repo.git")
+	runTestGit(t, repo, "remote", "add", "upstream", "ssh://git@github.com/parent/repo.git")
+	runTestGit(t, repo, "remote", "add", "mirror", "https://gitlab.com/owner/repo.git")
+
+	if err := addReviewRefspecs(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	if err := addReviewRefspecs(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+
+	want := map[string][]string{
+		"origin": {
+			"+refs/heads/*:refs/remotes/origin/*",
+			"+refs/pull/*/head:refs/remotes/origin/pr/*",
+		},
+		"upstream": {
+			"+refs/heads/*:refs/remotes/upstream/*",
+			"+refs/pull/*/head:refs/remotes/upstream/pr/*",
+		},
+		"mirror": {
+			"+refs/heads/*:refs/remotes/mirror/*",
+			"+refs/merge-requests/*/head:refs/remotes/mirror/mr/*",
+		},
+	}
+	for remote, wantFetches := range want {
+		got, err := gitConfigValues(context.Background(), repo, "remote."+remote+".fetch")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(wantFetches, got); diff != "" {
+			t.Errorf("%s fetch refspecs mismatch (-want +got):\n%s", remote, diff)
+		}
+	}
+}
+
+func TestAddReviewRefspecsUsesPrimaryFetchURL(t *testing.T) {
+	repo := t.TempDir()
+	runTestGit(t, repo, "init", "-q")
+	runTestGit(t, repo, "remote", "add", "origin", "https://example.com/owner/repo.git")
+	runTestGit(t, repo, "config", "--add", "remote.origin.url", "https://github.com/owner/repo.git")
+
+	if err := addReviewRefspecs(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+
+	fetches, err := gitConfigValues(context.Background(), repo, "remote.origin.fetch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"+refs/heads/*:refs/remotes/origin/*"}
+	if diff := cmp.Diff(want, fetches); diff != "" {
+		t.Fatalf("fetch refspecs mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestAddReviewRefspecsReplacesProviderRefspec(t *testing.T) {
+	repo := t.TempDir()
+	runTestGit(t, repo, "init", "-q")
+	runTestGit(t, repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	if err := addReviewRefspecs(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repo, "remote", "set-url", "origin", "https://gitlab.com/owner/repo.git")
+	if err := addReviewRefspecs(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+
+	fetches, err := gitConfigValues(context.Background(), repo, "remote.origin.fetch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"+refs/heads/*:refs/remotes/origin/*",
+		"+refs/merge-requests/*/head:refs/remotes/origin/mr/*",
+	}
+	if diff := cmp.Diff(want, fetches); diff != "" {
+		t.Fatalf("fetch refspecs mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestAddReviewRefspecsIgnoresUnsupportedHosts(t *testing.T) {
+	repo := t.TempDir()
+	runTestGit(t, repo, "init", "-q")
+	runTestGit(t, repo, "remote", "add", "origin", "https://github.com/owner/repo.git")
+
+	if err := addReviewRefspecs(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, repo, "remote", "set-url", "origin", "https://bitbucket.org/owner/repo.git")
+	if err := addReviewRefspecs(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+
+	fetches, err := gitConfigValues(context.Background(), repo, "remote.origin.fetch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"+refs/heads/*:refs/remotes/origin/*"}
+	if diff := cmp.Diff(want, fetches); diff != "" {
+		t.Fatalf("fetch refspecs mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestAddReviewRefspecsIgnoresGlobalRemotes(t *testing.T) {
+	repo := t.TempDir()
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	runTestGit(t, repo, "init", "-q")
+	runTestGit(t, repo, "config", "--global", "remote.phantom.url", "https://github.com/owner/repo.git")
+	runTestGit(t, repo, "config", "--global", "remote.phantom.fetch", "+refs/heads/*:refs/remotes/phantom/*")
+
+	if err := addReviewRefspecs(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+
+	remotes, err := localRemoteNames(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remotes) != 0 {
+		t.Fatalf("local remotes = %q, want none", remotes)
+	}
+	fetches, err := gitConfigValues(context.Background(), repo, "remote.phantom.fetch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(fetches) != 0 {
+		t.Fatalf("local phantom fetch refspecs = %q, want none", fetches)
+	}
+}
+
+func TestAddReviewRefspecsReportsGitError(t *testing.T) {
+	repo := t.TempDir()
+
+	err := addReviewRefspecs(context.Background(), repo)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "git config --local") {
+		t.Fatalf("err = %q, want command context", err)
+	}
+	if !strings.Contains(err.Error(), "fatal:") {
+		t.Fatalf("err = %q, want git stderr", err)
+	}
+}
+
+func runTestGit(t *testing.T, repo string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, output)
 	}
 }
 

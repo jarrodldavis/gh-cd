@@ -61,6 +61,25 @@ Repositories are cloned under:
 ~/git/<host>/<owner>/<repo>
 ```
 
+Whenever a repository is resolved, `gh-cd` also configures each supported remote
+to fetch code-review heads. A GitHub `origin` receives this local, idempotent
+fetch refspec:
+
+```text
++refs/pull/*/head:refs/remotes/origin/pr/*
+```
+
+GitLab remotes similarly receive:
+
+```text
++refs/merge-requests/*/head:refs/remotes/origin/mr/*
+```
+
+This applies to remotes created during cloning (including a GitHub fork's
+`upstream`) and supported remotes added later. Other hosts are not changed.
+Afterward, ordinary `git fetch` makes review tips available as refs such as
+`origin/pr/123` on GitHub or `origin/mr/123` on GitLab.
+
 Pass additional `git clone` flags after `--`:
 
 ```sh
