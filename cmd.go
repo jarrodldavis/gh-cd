@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2"
@@ -79,6 +81,10 @@ func cmd() *cobra.Command {
 				fmt.Fprintf(cmd.ErrOrStderr(), "using existing clone: %s\n", local)
 			}
 
+			if err := addReviewRefspecs(cmd.Context(), local); err != nil {
+				return fmt.Errorf("cannot cd: failed to configure code review refspecs: %w", err)
+			}
+
 			fmt.Fprintln(cmd.OutOrStdout(), local)
 			return nil
 		},
@@ -97,6 +103,137 @@ func cmd() *cobra.Command {
 	cmd.AddCommand(initCmd())
 
 	return cmd
+}
+
+func addReviewRefspecs(ctx context.Context, repo string) error {
+	remotes, err := localRemoteNames(ctx, repo)
+	if err != nil {
+		return err
+	}
+
+	for _, remote := range remotes {
+		urls, err := gitConfigValues(ctx, repo, fmt.Sprintf("remote.%s.url", remote))
+		if err != nil {
+			return err
+		}
+
+		key := fmt.Sprintf("remote.%s.fetch", remote)
+		fetches, err := gitConfigValues(ctx, repo, key)
+		if err != nil {
+			return err
+		}
+
+		var refspec string
+		if len(urls) > 0 {
+			refspec = reviewRefspec(remote, urls[0])
+		}
+
+		for _, managed := range managedReviewRefspecs(remote) {
+			if managed == refspec || !contains(fetches, managed) {
+				continue
+			}
+			if _, err := gitOutput(ctx, repo, "config", "--local", "--fixed-value", "--unset-all", key, managed); err != nil {
+				return err
+			}
+		}
+
+		if refspec == "" || contains(fetches, refspec) {
+			continue
+		}
+		if _, err := gitOutput(ctx, repo, "config", "--local", "--add", key, refspec); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func localRemoteNames(ctx context.Context, repo string) ([]string, error) {
+	output, err := gitOutput(ctx, repo, "config", "--local", "--name-only", "--get-regexp", `^remote\..*\.url$`)
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var remotes []string
+	seen := make(map[string]struct{})
+	for _, key := range outputLines(output) {
+		remote := strings.TrimSuffix(strings.TrimPrefix(key, "remote."), ".url")
+		if _, ok := seen[remote]; ok {
+			continue
+		}
+		seen[remote] = struct{}{}
+		remotes = append(remotes, remote)
+	}
+	return remotes, nil
+}
+
+func managedReviewRefspecs(remote string) []string {
+	return []string{
+		fmt.Sprintf("+refs/pull/*/head:refs/remotes/%s/pr/*", remote),
+		fmt.Sprintf("+refs/merge-requests/*/head:refs/remotes/%s/mr/*", remote),
+	}
+}
+
+func reviewRefspec(remote, rawURL string) string {
+	url := strings.ToLower(rawURL)
+	if strings.HasPrefix(url, "git@github.com:") ||
+		strings.HasPrefix(url, "ssh://git@github.com/") ||
+		strings.HasPrefix(url, "https://github.com/") {
+		return managedReviewRefspecs(remote)[0]
+	}
+	if strings.HasPrefix(url, "git@gitlab.com:") ||
+		strings.HasPrefix(url, "ssh://git@gitlab.com/") ||
+		strings.HasPrefix(url, "https://gitlab.com/") {
+		return managedReviewRefspecs(remote)[1]
+	}
+	return ""
+}
+
+func gitConfigValues(ctx context.Context, repo, key string) ([]string, error) {
+	output, err := gitOutput(ctx, repo, "config", "--local", "--get-all", key)
+	if err == nil {
+		return outputLines(output), nil
+	}
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return nil, nil
+	}
+	return nil, err
+}
+
+func gitOutput(ctx context.Context, repo string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		detail := strings.TrimSpace(stderr.String())
+		if detail == "" {
+			return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		}
+		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, detail)
+	}
+	return stdout.String(), nil
+}
+
+func outputLines(output string) []string {
+	return strings.Fields(strings.TrimSpace(output))
+}
+
+func contains(values []string, value string) bool {
+	for _, candidate := range values {
+		if candidate == value {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneOptions(cmd *cobra.Command) []string {
