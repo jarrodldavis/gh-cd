@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"gopkg.in/h2non/gock.v1"
 )
 
 func executeTestCmd(t *testing.T, args ...string) (string, string, error) {
@@ -73,6 +74,25 @@ func TestCmdRejectsExtraArgsWithoutDash(t *testing.T) {
 	_, _, err := executeTestCmd(t, "owner/repo", "--depth=1")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestCmdPreservesAuthenticationError(t *testing.T) {
+	t.Setenv("GH_TOKEN", "invalid-token")
+	defer gock.Off()
+
+	gock.New("https://api.github.com/").
+		Get("/user").
+		Reply(401).
+		JSON(map[string]string{"message": "Bad credentials"})
+
+	_, _, err := executeTestCmd(t, "features")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	want := "cannot cd: failed to determine repository owner"
+	if !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "Bad credentials") {
+		t.Fatalf("error = %q, want repository owner and authentication details", err)
 	}
 }
 

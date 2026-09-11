@@ -13,7 +13,10 @@ var diffOpts = cmp.AllowUnexported(parsed{}, url.Userinfo{})
 func assertParse(input string, want parsed) func(t *testing.T) {
 	return func(t *testing.T) {
 		t.Helper()
-		got := parse(input)
+		got, err := parse(input)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		if diff := cmp.Diff(&want, got, diffOpts); diff != "" {
 			t.Errorf("parse(%#v) = %s, want %s:\n%s", input, got, want, diff)
@@ -270,7 +273,7 @@ func TestParseInvalid(t *testing.T) {
 
 	for _, input := range tests {
 		t.Run(input, func(t *testing.T) {
-			if got := parse(input); got != nil {
+			if got, err := parse(input); got != nil || err == nil {
 				t.Fatalf("parse(%#v) = %s, want nil", input, got)
 			}
 		})

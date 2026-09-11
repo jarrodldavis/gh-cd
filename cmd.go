@@ -42,10 +42,9 @@ func cmd() *cobra.Command {
 			Pass additional %[1]sgit clone%[1]s flags by listing them after "--".
 		`, "`"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			parsed := parse(args[0])
-
-			if parsed == nil {
-				return errors.New("cannot cd: failed to parse repository argument")
+			parsed, err := parse(args[0])
+			if err != nil {
+				return fmt.Errorf("cannot cd: %w", err)
 			}
 
 			home, err := os.UserHomeDir()
