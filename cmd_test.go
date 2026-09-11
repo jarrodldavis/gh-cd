@@ -15,15 +15,19 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/spf13/cobra"
 	"gopkg.in/h2non/gock.v1"
 )
 
 func executeTestCmd(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
+	return executeCommand(t, cmd(), args...)
+}
 
+func executeCommand(t *testing.T, cmd *cobra.Command, args ...string) (string, string, error) {
+	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd := cmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 	cmd.SetOut(&stdout)
@@ -84,6 +88,27 @@ func TestCmdWithoutShellIntegrationErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "requires shell integration") {
 		t.Fatalf("error = %q, want shell integration guidance", err)
+	}
+}
+
+func TestCmdWritesShellAction(t *testing.T) {
+	home := setTestHome(t)
+	wantPath := filepath.Join(home, "git", "github.com", "owner", "repo")
+	if err := os.MkdirAll(wantPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, wantPath, "init", "-q")
+
+	var action bytes.Buffer
+	stdout, _, err := executeCommand(t, cmdWithAction(&action), "owner/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if want := "cd\n" + wantPath + "\n"; action.String() != want {
+		t.Fatalf("action = %q, want %q", action.String(), want)
 	}
 }
 
@@ -465,13 +490,20 @@ func TestZshInitDispatchesExtensionCommandsAndRepositories(t *testing.T) {
 		"GH_CD_DISPATCH_LOG="+logPath,
 		"GH_CD_DISPATCH_DESTINATION="+destination,
 	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("zsh integration failed: %v\n%s", err, output)
+	var integrationStdout bytes.Buffer
+	var integrationStderr bytes.Buffer
+	command.Stdout = &integrationStdout
+	command.Stderr = &integrationStderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("zsh integration failed: %v\nstdout:\n%s\nstderr:\n%s", err, integrationStdout.String(), integrationStderr.String())
 	}
-	wantOutput := "combined piped help\nshell init\n" + destination + "\npath_unchanged=yes\nlive stdout\nlive stderr\n" + destination + "\nclone failed\nfailure=7 unchanged=yes"
-	if got := strings.TrimSpace(string(output)); got != wantOutput {
-		t.Fatalf("output = %q, want %q", got, wantOutput)
+	wantStdout := "combined piped help\nshell init\n" + destination + "\npath_unchanged=yes\nlive stdout\n" + destination + "\nfailure=7 unchanged=yes"
+	if got := strings.TrimSpace(integrationStdout.String()); got != wantStdout {
+		t.Fatalf("stdout = %q, want %q", got, wantStdout)
+	}
+	wantStderr := "live stderr\nclone failed"
+	if got := strings.TrimSpace(integrationStderr.String()); got != wantStderr {
+		t.Fatalf("stderr = %q, want %q", got, wantStderr)
 	}
 
 	calls, err := os.ReadFile(logPath)

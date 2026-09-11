@@ -32,6 +32,13 @@ gh cd https://github.com/cli/cli
 gh cd git@github.com:cli/cli.git
 ```
 
+To resolve or clone a repository and print its local path without changing
+directories, use `gh cd path`:
+
+```sh
+gh cd path cli/cli
+```
+
 Repositories are cloned under:
 
 ```text

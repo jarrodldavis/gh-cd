@@ -19,6 +19,13 @@ import (
 )
 
 func cmd() *cobra.Command {
+	if os.Getenv("GH_CD_SHELL_FD") != "3" {
+		return cmdWithAction(nil)
+	}
+	return cmdWithAction(os.NewFile(3, "gh-cd-shell-action"))
+}
+
+func cmdWithAction(shellAction io.Writer) *cobra.Command {
 	options := &cdOptions{}
 	cmd := &cobra.Command{
 		DisableFlagsInUseLine: true,
@@ -37,7 +44,7 @@ func cmd() *cobra.Command {
 			cobra.CommandDisplayNameAnnotation: "gh cd",
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if os.Getenv("GH_CD_SHELL_FD") != "3" {
+			if shellAction == nil {
 				return errors.New("gh cd requires shell integration; run 'eval \"$(gh cd init zsh)\"'")
 			}
 			local, err := resolveRepository(cmd, args, options)
@@ -48,11 +55,7 @@ func cmd() *cobra.Command {
 			// os/exec-based extension launcher leaves inherited descriptors >= 3
 			// open, so this channel survives the intermediate `gh` process. Keep
 			// TestGHLauncherPreservesActionDescriptor as coverage for that contract.
-			action := os.NewFile(3, "gh-cd-shell-action")
-			if action == nil {
-				return errors.New("cannot cd: shell action descriptor is unavailable")
-			}
-			if _, err := fmt.Fprintf(action, "cd\n%s\n", local); err != nil {
+			if _, err := fmt.Fprintf(shellAction, "cd\n%s\n", local); err != nil {
 				return fmt.Errorf("cannot cd: failed to send shell action: %w", err)
 			}
 			return nil
