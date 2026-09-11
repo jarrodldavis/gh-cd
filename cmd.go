@@ -18,11 +18,22 @@ import (
 )
 
 func cmd() *cobra.Command {
+	var initShell string
+	var wrapGH bool
 	cmd := &cobra.Command{
 		DisableFlagsInUseLine: true,
 
-		Use: "gh cd <repository> [-- <gitflags>...]",
+		Use: "gh cd [<repository>] [-- <gitflags>...]",
 		Args: func(cmd *cobra.Command, args []string) error {
+			if initShell != "" {
+				if len(args) != 0 {
+					return errors.New("cannot initialize shell integration: repository argument not allowed")
+				}
+				return nil
+			}
+			if wrapGH {
+				return errors.New("--wrap-gh requires --init")
+			}
 			dash := cmd.Flags().ArgsLenAtDash()
 			if len(args) == 0 || dash == 0 {
 				return errors.New("cannot cd: repository argument required")
@@ -38,10 +49,19 @@ func cmd() *cobra.Command {
 		Short: "Print the path to a local clone, creating the clone if necessary",
 		Long: heredoc.Docf(`
 			Print the path to a local clone, creating the clone if necessary.
-			Use %[1]sgh cd init <shell>%[1]s to define a shell function that changes directories.
+			Use %[1]sgh cd --init <shell>%[1]s to define a shell function that changes directories.
 			Pass additional %[1]sgit clone%[1]s flags by listing them after "--".
 		`, "`"),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if initShell != "" {
+				init, err := shellInit(initShell, wrapGH)
+				if err != nil {
+					return err
+				}
+				fmt.Fprint(cmd.OutOrStdout(), init)
+				return nil
+			}
+
 			parsed := parse(args[0])
 
 			if parsed == nil {
@@ -91,6 +111,8 @@ func cmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolP("help", "h", false, "help for gh cd")
+	cmd.Flags().StringVar(&initShell, "init", "", "print shell integration for bash or zsh")
+	cmd.Flags().BoolVar(&wrapGH, "wrap-gh", false, "define a gh function that handles gh cd (requires --init)")
 	cmd.Flags().Bool("no-upstream", false, "do not add an upstream remote when cloning a fork")
 	cmd.Flags().StringP("upstream-remote-name", "u", "", "upstream remote name when cloning a fork")
 
@@ -100,8 +122,6 @@ func cmd() *cobra.Command {
 		}
 		return fmt.Errorf("%w\nSeparate git clone flags with '--'.", err)
 	})
-	cmd.AddCommand(initCmd())
-
 	return cmd
 }
 
@@ -268,38 +288,21 @@ func runClone(ctx context.Context, output io.Writer, args ...string) error {
 	return cmd.Run()
 }
 
-func initCmd() *cobra.Command {
-	var wrapGH bool
-	cmd := &cobra.Command{
-		Use:                   "init <shell>",
-		DisableFlagsInUseLine: true,
-		Args:                  cobra.ExactArgs(1),
-		Short:                 "Print shell integration for gh-cd",
-		ValidArgs:             []string{"bash", "zsh"},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			var init string
-			switch args[0] {
-			case "bash":
-				if wrapGH {
-					init = bashWrapGHInit
-				} else {
-					init = bashInit
-				}
-			case "zsh":
-				if wrapGH {
-					init = zshWrapGHInit
-				} else {
-					init = zshInit
-				}
-			default:
-				return fmt.Errorf("unsupported shell %q", args[0])
-			}
-			fmt.Fprint(cmd.OutOrStdout(), init)
-			return nil
-		},
+func shellInit(shell string, wrapGH bool) (string, error) {
+	switch shell {
+	case "bash":
+		if wrapGH {
+			return bashWrapGHInit, nil
+		}
+		return bashInit, nil
+	case "zsh":
+		if wrapGH {
+			return zshWrapGHInit, nil
+		}
+		return zshInit, nil
+	default:
+		return "", fmt.Errorf("unsupported shell %q", shell)
 	}
-	cmd.Flags().BoolVar(&wrapGH, "wrap-gh", false, "define a gh function that handles gh cd")
-	return cmd
 }
 
 const bashInit = `ghcd() {
@@ -310,7 +313,7 @@ const bashInit = `ghcd() {
 `
 
 const bashWrapGHInit = `gh() {
-  if [[ "${1-}" == "cd" ]]; then
+  if [[ "${1-}" == "cd" && "${2-}" != "--init" ]]; then
     shift
     local dir
     dir="$(command gh cd "$@")" || return
@@ -329,7 +332,7 @@ const zshInit = `ghcd() {
 `
 
 const zshWrapGHInit = `gh() {
-  if [[ "${1-}" == "cd" ]]; then
+  if [[ "${1-}" == "cd" && "${2-}" != "--init" ]]; then
     shift
     local dir
     dir="$(command gh cd "$@")" || return

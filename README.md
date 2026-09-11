@@ -18,7 +18,7 @@ gh extension install jarrodldavis/gh-cd
 Add this to `.zshrc` to define a `ghcd` helper:
 
 ```zsh
-eval "$(gh cd init zsh)"
+eval "$(gh cd --init zsh)"
 ```
 
 This defines:
@@ -34,7 +34,7 @@ ghcd() {
 If you prefer `gh cd <repo>` syntax, use the opt-in wrapper instead:
 
 ```zsh
-eval "$(gh cd init zsh --wrap-gh)"
+eval "$(gh cd --init zsh --wrap-gh)"
 ```
 
 That defines a `gh()` function that intercepts only `gh cd` and forwards all
@@ -45,13 +45,13 @@ other `gh` commands to the real GitHub CLI executable.
 Add this to `.bashrc` to define a `ghcd` helper:
 
 ```bash
-eval "$(gh cd init bash)"
+eval "$(gh cd --init bash)"
 ```
 
 If you prefer `gh cd <repo>` syntax, use the opt-in wrapper instead:
 
 ```bash
-eval "$(gh cd init bash --wrap-gh)"
+eval "$(gh cd --init bash --wrap-gh)"
 ```
 
 ## Usage

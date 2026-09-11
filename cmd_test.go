@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"gopkg.in/h2non/gock.v1"
 )
 
 func executeTestCmd(t *testing.T, args ...string) (string, string, error) {
@@ -95,6 +96,36 @@ func TestCmdPrintsExistingClone(t *testing.T) {
 	}
 	if stderr != "using existing clone: "+wantPath+"\n" {
 		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestCmdTreatsInitAsRepository(t *testing.T) {
+	home := setTestHome(t)
+	logPath := installFakeGH(t)
+	t.Setenv("GH_TOKEN", "test-token")
+	defer gock.Off()
+	gock.New("https://api.github.com/").
+		Get("/user").
+		Reply(200).
+		JSON(map[string]string{"login": "owner"})
+
+	stdout, _, err := executeTestCmd(t, "init")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	local := filepath.Join(home, "git", "github.com", "owner", "init")
+	if stdout != local+"\n" {
+		t.Fatalf("stdout = %q, want %q", stdout, local+"\n")
+	}
+	gotBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCloneArgs := strings.Split(strings.TrimSuffix(string(gotBytes), "\n"), "\n")
+	wantCloneArgs := []string{"repo", "clone", "owner/init", local}
+	if diff := cmp.Diff(wantCloneArgs, gotCloneArgs); diff != "" {
+		t.Fatalf("clone args mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -335,7 +366,7 @@ func TestCmdCloneFailureDoesNotPrintDirectory(t *testing.T) {
 }
 
 func TestCmdInitZsh(t *testing.T) {
-	stdout, stderr, err := executeTestCmd(t, "init", "zsh")
+	stdout, stderr, err := executeTestCmd(t, "--init", "zsh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +379,7 @@ func TestCmdInitZsh(t *testing.T) {
 }
 
 func TestCmdInitZshWrapGH(t *testing.T) {
-	stdout, stderr, err := executeTestCmd(t, "init", "zsh", "--wrap-gh")
+	stdout, stderr, err := executeTestCmd(t, "--init", "zsh", "--wrap-gh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,7 +392,7 @@ func TestCmdInitZshWrapGH(t *testing.T) {
 }
 
 func TestCmdInitBash(t *testing.T) {
-	stdout, stderr, err := executeTestCmd(t, "init", "bash")
+	stdout, stderr, err := executeTestCmd(t, "--init", "bash")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -374,7 +405,7 @@ func TestCmdInitBash(t *testing.T) {
 }
 
 func TestCmdInitBashWrapGH(t *testing.T) {
-	stdout, stderr, err := executeTestCmd(t, "init", "bash", "--wrap-gh")
+	stdout, stderr, err := executeTestCmd(t, "--init", "bash", "--wrap-gh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +421,7 @@ func TestCmdInitBashChangesDirectory(t *testing.T) {
 	target := t.TempDir()
 	installShellTestGH(t, target)
 
-	init, stderr, err := executeTestCmd(t, "init", "bash")
+	init, stderr, err := executeTestCmd(t, "--init", "bash")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,7 +443,7 @@ func TestCmdInitBashWrapGHChangesDirectoryAndForwards(t *testing.T) {
 	target := t.TempDir()
 	installShellTestGH(t, target)
 
-	init, stderr, err := executeTestCmd(t, "init", "bash", "--wrap-gh")
+	init, stderr, err := executeTestCmd(t, "--init", "bash", "--wrap-gh")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,12 +451,12 @@ func TestCmdInitBashWrapGHChangesDirectoryAndForwards(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 
-	stdout := runBash(t, init+"\nset -u\ngh cd owner/repo\npwd -P\ngh status --json state\ngh\n")
+	stdout := runBash(t, init+"\nset -u\ngh cd owner/repo\npwd -P\ngh status --json state\ngh\neval \"$(gh cd --init bash --wrap-gh)\"\nprintf 'resourced: %s\\n' \"$GH_CD_RESOURCED\"\n")
 	want, err := filepath.EvalSymlinks(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want += "\nforwarded: status --json state\nforwarded: \n"
+	want += "\nforwarded: status --json state\nforwarded: \nresourced: 1\n"
 	if stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
@@ -437,7 +468,9 @@ func installShellTestGH(t *testing.T, target string) {
 	dir := t.TempDir()
 	ghPath := filepath.Join(dir, "gh")
 	contents := `#!/bin/sh
-if [ "$1" = "cd" ]; then
+if [ "$1" = "cd" ] && [ "${2-}" = "--init" ]; then
+  printf 'GH_CD_RESOURCED=1\n'
+elif [ "$1" = "cd" ]; then
   printf '%s\n' "$GH_CD_TEST_TARGET"
 else
   printf 'forwarded: %s\n' "$*"
