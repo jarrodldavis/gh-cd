@@ -354,6 +354,34 @@ func TestCmdCloneFailureDoesNotPrintDirectory(t *testing.T) {
 	}
 }
 
+func TestCmdMkdirInitializesRepository(t *testing.T) {
+	home := setTestHome(t)
+	logPath := installFakeGH(t)
+
+	stdout, stderr, err := executeTestCmd(t, "owner/repo", "--mkdir")
+	if err != nil {
+		t.Fatalf("err = %v, stderr = %q", err, stderr)
+	}
+
+	local := filepath.Join(home, "git", "github.com", "owner", "repo")
+	if stdout != local+"\n" {
+		t.Fatalf("stdout = %q, want %q", stdout, local+"\n")
+	}
+	if !strings.Contains(stderr, "initialized empty repository: "+local+"\n") {
+		t.Fatalf("stderr = %q, want initialization message", stderr)
+	}
+	gitDir := filepath.Join(local, ".git")
+	if info, err := os.Stat(gitDir); err != nil || !info.IsDir() {
+		t.Fatalf("git directory %q: info=%v err=%v", gitDir, info, err)
+	}
+	if _, err := os.Stat(logPath); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			t.Fatalf("gh was invoked; clone arguments were written to %s", logPath)
+		}
+		t.Fatalf("stat clone argument log: %v", err)
+	}
+}
+
 func TestCmdInitZsh(t *testing.T) {
 	stdout, stderr, err := executeTestCmd(t, "init", "zsh")
 	if err != nil {

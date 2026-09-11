@@ -92,3 +92,12 @@ Clone options supported by `gh repo clone` can be passed before `--`:
 ghcd cli/cli --no-upstream
 ghcd cli/cli --upstream-remote-name parent
 ```
+
+To initialize an empty local Git repository without checking or cloning the
+requested remote, pass `--mkdir`:
+
+```sh
+ghcd owner/new-repository --mkdir
+```
+
+If the local directory already exists, it is used as usual.
