@@ -312,7 +312,7 @@ const bashInit = `ghcd() {
 `
 
 const bashWrapGHInit = `gh() {
-  if [[ "${1-}" == "cd" && "${2-}" != "--init" ]]; then
+  if [[ "${1-}" == "cd" && "${2-}" != "--init" && "${2-}" != --init=* ]]; then
     shift
     local dir
     dir="$(command gh cd "$@")" || return
@@ -331,7 +331,7 @@ const zshInit = `ghcd() {
 `
 
 const zshWrapGHInit = `gh() {
-  if [[ "${1-}" == "cd" && "${2-}" != "--init" ]]; then
+  if [[ "${1-}" == "cd" && "${2-}" != "--init" && "${2-}" != --init=* ]]; then
     shift
     local dir
     dir="$(command gh cd "$@")" || return

@@ -470,12 +470,12 @@ func TestCmdInitBashWrapGHChangesDirectoryAndForwards(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 
-	stdout := runBash(t, init+"\nset -u\ngh cd owner/repo\npwd -P\ngh status --json state\ngh\neval \"$(gh cd --init bash --wrap-gh)\"\nprintf 'resourced: %s\\n' \"$GH_CD_RESOURCED\"\n")
+	stdout := runBash(t, init+"\nset -u\ngh cd owner/repo\npwd -P\ngh status --json state\ngh\neval \"$(gh cd --init bash --wrap-gh)\"\nprintf 'resourced: %s\\n' \"$GH_CD_RESOURCED\"\nunset GH_CD_RESOURCED\neval \"$(gh cd --init=bash --wrap-gh)\"\nprintf 'resourced with equals: %s\\n' \"$GH_CD_RESOURCED\"\n")
 	want, err := filepath.EvalSymlinks(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want += "\nforwarded: status --json state\nforwarded: \nresourced: 1\n"
+	want += "\nforwarded: status --json state\nforwarded: \nresourced: 1\nresourced with equals: 1\n"
 	if stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
@@ -487,13 +487,18 @@ func installShellTestGH(t *testing.T, target string) {
 	dir := t.TempDir()
 	ghPath := filepath.Join(dir, "gh")
 	contents := `#!/bin/sh
-if [ "$1" = "cd" ] && [ "${2-}" = "--init" ]; then
+case "${1-}:${2-}" in
+cd:--init|cd:--init=*)
   printf 'GH_CD_RESOURCED=1\n'
-elif [ "$1" = "cd" ]; then
-  printf '%s\n' "$GH_CD_TEST_TARGET"
-else
-  printf 'forwarded: %s\n' "$*"
-fi
+  ;;
+*)
+  if [ "$1" = "cd" ]; then
+    printf '%s\n' "$GH_CD_TEST_TARGET"
+  else
+    printf 'forwarded: %s\n' "$*"
+  fi
+  ;;
+esac
 `
 	if err := os.WriteFile(ghPath, []byte(contents), 0o755); err != nil {
 		t.Fatal(err)
