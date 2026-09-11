@@ -420,12 +420,12 @@ func TestCmdInitBashWrapGHChangesDirectoryAndForwards(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 
-	stdout := runBash(t, init+"\ngh cd owner/repo\npwd -P\ngh status --json state\n")
+	stdout := runBash(t, init+"\nset -u\ngh cd owner/repo\npwd -P\ngh status --json state\ngh\n")
 	want, err := filepath.EvalSymlinks(target)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want += "\nforwarded: status --json state\n"
+	want += "\nforwarded: status --json state\nforwarded: \n"
 	if stdout != want {
 		t.Fatalf("stdout = %q, want %q", stdout, want)
 	}
