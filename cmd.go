@@ -44,6 +44,10 @@ func cmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// The Zsh wrapper opens fd 3 without FD_CLOEXEC. On Unix, GitHub CLI's
+			// os/exec-based extension launcher leaves inherited descriptors >= 3
+			// open, so this channel survives the intermediate `gh` process. Keep
+			// TestGHLauncherPreservesActionDescriptor as coverage for that contract.
 			action := os.NewFile(3, "gh-cd-shell-action")
 			if action == nil {
 				return errors.New("cannot cd: shell action descriptor is unavailable")

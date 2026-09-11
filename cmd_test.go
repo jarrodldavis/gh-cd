@@ -5,9 +5,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -513,5 +515,57 @@ func TestZshInitDispatchesExtensionCommandsAndRepositories(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGHLauncherPreservesActionDescriptor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell action descriptors are supported only on Unix")
+	}
+	ghPath, err := exec.LookPath("gh")
+	if err != nil {
+		t.Skip("gh is not installed")
+	}
+
+	dataDir := t.TempDir()
+	extensionDir := filepath.Join(dataDir, "gh", "extensions", "gh-fd-probe")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := os.ReadFile("testdata/fd-probe.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extensionDir, "gh-fd-probe"), probe, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	actionReader, actionWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer actionReader.Close()
+
+	command := exec.Command(ghPath, "fd-probe")
+	command.Env = append(os.Environ(),
+		"XDG_DATA_HOME="+dataDir,
+		"GH_CONFIG_DIR="+filepath.Join(dataDir, "config"),
+		"GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
+	)
+	command.ExtraFiles = []*os.File{actionWriter}
+	if output, err := command.CombinedOutput(); err != nil {
+		actionWriter.Close()
+		t.Fatalf("gh extension invocation failed: %v\n%s", err, output)
+	}
+	if err := actionWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	action, err := io.ReadAll(actionReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(action) != "inherited\n" {
+		t.Fatalf("action = %q, want descriptor payload", action)
 	}
 }
