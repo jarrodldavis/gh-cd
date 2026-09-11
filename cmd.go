@@ -18,6 +18,7 @@ import (
 )
 
 func cmd() *cobra.Command {
+	var mkdir bool
 	cmd := &cobra.Command{
 		DisableFlagsInUseLine: true,
 
@@ -57,7 +58,12 @@ func cmd() *cobra.Command {
 			localSegments = append(localSegments, parsed.local...)
 			local := filepath.Join(localSegments...)
 
-			if info, err := os.Stat(local); errors.Is(err, os.ErrNotExist) {
+			if info, err := os.Stat(local); errors.Is(err, os.ErrNotExist) && mkdir {
+				if err := initRepository(cmd.Context(), local); err != nil {
+					return fmt.Errorf("cannot cd: failed to initialize repository: %w", err)
+				}
+				fmt.Fprintf(cmd.ErrOrStderr(), "initialized empty repository: %s\n", local)
+			} else if errors.Is(err, os.ErrNotExist) {
 				if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
 					return fmt.Errorf("cannot cd: failed to create parent directory: %w", err)
 				}
@@ -90,6 +96,7 @@ func cmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolP("help", "h", false, "help for gh cd")
+	cmd.Flags().BoolVar(&mkdir, "mkdir", false, "initialize an empty repository instead of cloning")
 	cmd.Flags().Bool("no-upstream", false, "do not add an upstream remote when cloning a fork")
 	cmd.Flags().StringP("upstream-remote-name", "u", "", "upstream remote name when cloning a fork")
 
@@ -265,6 +272,14 @@ func runClone(ctx context.Context, output io.Writer, args ...string) error {
 	cmd.Stdout = output
 	cmd.Stderr = output
 	return cmd.Run()
+}
+
+func initRepository(ctx context.Context, repo string) error {
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		return err
+	}
+	_, err := gitOutput(ctx, repo, "init", "-q")
+	return err
 }
 
 func initCmd() *cobra.Command {
