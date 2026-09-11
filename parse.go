@@ -81,7 +81,7 @@ func parse(s string) (*parsed, error) {
 		remote, err := url.ParseRequestURI(s)
 
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", errInvalidRepository, err)
+			return nil, fmt.Errorf("%w: %w", errInvalidRepository, err)
 		}
 
 		if _, accepted := acceptedSchemes[remote.Scheme]; !accepted {
@@ -125,7 +125,7 @@ func parse(s string) (*parsed, error) {
 		repo, err := repository.Parse(s)
 
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", errInvalidRepository, err)
+			return nil, fmt.Errorf("%w: %w", errInvalidRepository, err)
 		}
 
 		repo.Name = strings.TrimSuffix(repo.Name, ".git")
