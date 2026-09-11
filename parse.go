@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -8,6 +9,8 @@ import (
 	"github.com/cli/go-gh/v2/pkg/api"
 	"github.com/cli/go-gh/v2/pkg/repository"
 )
+
+var errInvalidRepository = errors.New("invalid repository argument")
 
 var acceptedSchemes = map[string]struct{}{
 	"ssh":   {},
@@ -69,44 +72,52 @@ func normalize(remote *url.URL) *parsed {
 	return &parsed{local, remote}
 }
 
-func parse(s string) *parsed {
+func parse(s string) (*parsed, error) {
 	if s == "" {
-		return nil
+		return nil, errInvalidRepository
 	}
 
 	if strings.Contains(s, "://") {
 		remote, err := url.ParseRequestURI(s)
 
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("%w: %w", errInvalidRepository, err)
 		}
 
 		if _, accepted := acceptedSchemes[remote.Scheme]; !accepted {
-			return nil
+			return nil, errInvalidRepository
 		}
 
-		return normalize(remote)
+		parsed := normalize(remote)
+		if parsed == nil {
+			return nil, errInvalidRepository
+		}
+		return parsed, nil
 	} else if host, path, found := strings.Cut(s, ":"); found {
 		if len(host) == 0 || len(path) == 0 {
-			return nil
+			return nil, errInvalidRepository
 		}
 
 		remote := &url.URL{Scheme: "ssh", Host: host, Path: path}
 		if user, host, found := strings.Cut(host, "@"); found {
 			if len(user) == 0 || len(host) == 0 {
-				return nil
+				return nil, errInvalidRepository
 			}
 
 			remote.User = url.User(user)
 			remote.Host = host
 		}
 
-		return normalize(remote)
+		parsed := normalize(remote)
+		if parsed == nil {
+			return nil, errInvalidRepository
+		}
+		return parsed, nil
 	} else {
 		if !strings.Contains(s, "/") {
 			owner, err := login()
 			if err != nil {
-				return nil
+				return nil, fmt.Errorf("failed to determine repository owner: %w", err)
 			}
 			s = owner + "/" + s
 		}
@@ -114,7 +125,7 @@ func parse(s string) *parsed {
 		repo, err := repository.Parse(s)
 
 		if err != nil {
-			return nil
+			return nil, fmt.Errorf("%w: %w", errInvalidRepository, err)
 		}
 
 		repo.Name = strings.TrimSuffix(repo.Name, ".git")
@@ -124,6 +135,6 @@ func parse(s string) *parsed {
 		}
 		remote := &url.URL{Path: path}
 		local := []string{repo.Host, repo.Owner, repo.Name}
-		return &parsed{local, remote}
+		return &parsed{local, remote}, nil
 	}
 }

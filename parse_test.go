@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/url"
 	"testing"
 
@@ -13,7 +14,10 @@ var diffOpts = cmp.AllowUnexported(parsed{}, url.Userinfo{})
 func assertParse(input string, want parsed) func(t *testing.T) {
 	return func(t *testing.T) {
 		t.Helper()
-		got := parse(input)
+		got, err := parse(input)
+		if err != nil {
+			t.Fatal(err)
+		}
 
 		if diff := cmp.Diff(&want, got, diffOpts); diff != "" {
 			t.Errorf("parse(%#v) = %s, want %s:\n%s", input, got, want, diff)
@@ -270,9 +274,17 @@ func TestParseInvalid(t *testing.T) {
 
 	for _, input := range tests {
 		t.Run(input, func(t *testing.T) {
-			if got := parse(input); got != nil {
+			if got, err := parse(input); got != nil || !errors.Is(err, errInvalidRepository) {
 				t.Fatalf("parse(%#v) = %s, want nil", input, got)
 			}
 		})
+	}
+}
+
+func TestParsePreservesURLParseError(t *testing.T) {
+	_, err := parse("https://host.xz/%zz")
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		t.Fatalf("error = %v, want *url.Error", err)
 	}
 }

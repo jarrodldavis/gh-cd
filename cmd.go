@@ -62,10 +62,9 @@ func cmd() *cobra.Command {
 				return nil
 			}
 
-			parsed := parse(args[0])
-
-			if parsed == nil {
-				return errors.New("cannot cd: failed to parse repository argument")
+			parsed, err := parse(args[0])
+			if err != nil {
+				return fmt.Errorf("cannot cd: %w", err)
 			}
 
 			home, err := os.UserHomeDir()

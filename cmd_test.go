@@ -77,6 +77,25 @@ func TestCmdRejectsExtraArgsWithoutDash(t *testing.T) {
 	}
 }
 
+func TestCmdPreservesAuthenticationError(t *testing.T) {
+	t.Setenv("GH_TOKEN", "invalid-token")
+	defer gock.Off()
+
+	gock.New("https://api.github.com/").
+		Get("/user").
+		Reply(401).
+		JSON(map[string]string{"message": "Bad credentials"})
+
+	_, _, err := executeTestCmd(t, "features")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	want := "cannot cd: failed to determine repository owner"
+	if !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "Bad credentials") {
+		t.Fatalf("error = %q, want repository owner and authentication details", err)
+	}
+}
+
 func TestCmdPrintsExistingClone(t *testing.T) {
 	home := setTestHome(t)
 	wantPath := filepath.Join(home, "git", "github.com", "owner", "repo")
