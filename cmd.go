@@ -38,7 +38,7 @@ func cmd() *cobra.Command {
 		Short: "Print the path to a local clone, creating the clone if necessary",
 		Long: heredoc.Docf(`
 			Print the path to a local clone, creating the clone if necessary.
-			Use %[1]sgh cd init zsh%[1]s to define a Zsh function that changes directories.
+			Use %[1]sgh cd init <shell>%[1]s to define a shell function that changes directories.
 			Pass additional %[1]sgit clone%[1]s flags by listing them after "--".
 		`, "`"),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -271,25 +271,55 @@ func runClone(ctx context.Context, output io.Writer, args ...string) error {
 func initCmd() *cobra.Command {
 	var wrapGH bool
 	cmd := &cobra.Command{
-		Use:                   "init zsh",
+		Use:                   "init <shell>",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
 		Short:                 "Print shell integration for gh-cd",
+		ValidArgs:             []string{"bash", "zsh"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if args[0] != "zsh" {
+			var init string
+			switch args[0] {
+			case "bash":
+				if wrapGH {
+					init = bashWrapGHInit
+				} else {
+					init = bashInit
+				}
+			case "zsh":
+				if wrapGH {
+					init = zshWrapGHInit
+				} else {
+					init = zshInit
+				}
+			default:
 				return fmt.Errorf("unsupported shell %q", args[0])
 			}
-			if wrapGH {
-				fmt.Fprint(cmd.OutOrStdout(), zshWrapGHInit)
-				return nil
-			}
-			fmt.Fprint(cmd.OutOrStdout(), zshInit)
+			fmt.Fprint(cmd.OutOrStdout(), init)
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&wrapGH, "wrap-gh", false, "define a gh function that handles gh cd")
 	return cmd
 }
+
+const bashInit = `ghcd() {
+  local dir
+  dir="$(gh cd "$@")" || return
+  builtin cd -- "$dir"
+}
+`
+
+const bashWrapGHInit = `gh() {
+  if [[ "$1" == "cd" ]]; then
+    shift
+    local dir
+    dir="$(command gh cd "$@")" || return
+    builtin cd -- "$dir"
+  else
+    command gh "$@"
+  fi
+}
+`
 
 const zshInit = `ghcd() {
   local dir

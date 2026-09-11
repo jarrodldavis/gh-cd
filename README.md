@@ -4,7 +4,7 @@
 local clone, cloning it first when necessary.
 
 The extension prints the local directory to stdout. It cannot change the parent
-shell process by itself, so the recommended Zsh integration is a small function
+shell process by itself, so the recommended shell integration is a small function
 that runs `cd` after the extension succeeds.
 
 ## Install
@@ -39,6 +39,20 @@ eval "$(gh cd init zsh --wrap-gh)"
 
 That defines a `gh()` function that intercepts only `gh cd` and forwards all
 other `gh` commands to the real GitHub CLI executable.
+
+## Bash Setup
+
+Add this to `.bashrc` to define a `ghcd` helper:
+
+```bash
+eval "$(gh cd init bash)"
+```
+
+If you prefer `gh cd <repo>` syntax, use the opt-in wrapper instead:
+
+```bash
+eval "$(gh cd init bash --wrap-gh)"
+```
 
 ## Usage
 

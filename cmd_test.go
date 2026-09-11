@@ -359,3 +359,104 @@ func TestCmdInitZshWrapGH(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
 }
+
+func TestCmdInitBash(t *testing.T) {
+	stdout, stderr, err := executeTestCmd(t, "init", "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout != bashInit {
+		t.Fatalf("stdout = %q, want %q", stdout, bashInit)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestCmdInitBashWrapGH(t *testing.T) {
+	stdout, stderr, err := executeTestCmd(t, "init", "bash", "--wrap-gh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout != bashWrapGHInit {
+		t.Fatalf("stdout = %q, want %q", stdout, bashWrapGHInit)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestCmdInitBashChangesDirectory(t *testing.T) {
+	target := t.TempDir()
+	installShellTestGH(t, target)
+
+	init, stderr, err := executeTestCmd(t, "init", "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	stdout := runBash(t, init+"\nghcd owner/repo\npwd -P\n")
+	want, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout != want+"\n" {
+		t.Fatalf("stdout = %q, want %q", stdout, want+"\n")
+	}
+}
+
+func TestCmdInitBashWrapGHChangesDirectoryAndForwards(t *testing.T) {
+	target := t.TempDir()
+	installShellTestGH(t, target)
+
+	init, stderr, err := executeTestCmd(t, "init", "bash", "--wrap-gh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+
+	stdout := runBash(t, init+"\ngh cd owner/repo\npwd -P\ngh status --json state\n")
+	want, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want += "\nforwarded: status --json state\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func installShellTestGH(t *testing.T, target string) {
+	t.Helper()
+
+	dir := t.TempDir()
+	ghPath := filepath.Join(dir, "gh")
+	contents := `#!/bin/sh
+if [ "$1" = "cd" ]; then
+  printf '%s\n' "$GH_CD_TEST_TARGET"
+else
+  printf 'forwarded: %s\n' "$*"
+fi
+`
+	if err := os.WriteFile(ghPath, []byte(contents), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_CD_TEST_TARGET", target)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func runBash(t *testing.T, script string) string {
+	t.Helper()
+
+	command := exec.Command("bash", "--noprofile", "--norc", "-c", script)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash failed: %v\n%s", err, output)
+	}
+	return string(output)
+}
