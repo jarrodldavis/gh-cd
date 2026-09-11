@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"gopkg.in/h2non/gock.v1"
@@ -64,14 +66,49 @@ exit "${GH_CD_FAKE_EXIT:-0}"
 }
 
 func TestCmdRequiresRepository(t *testing.T) {
-	_, _, err := executeTestCmd(t)
+	_, _, err := executeTestCmd(t, "path")
 	if err == nil {
 		t.Fatal("expected error")
 	}
 }
 
+func TestCmdWithoutShellIntegrationErrors(t *testing.T) {
+	stdout, _, err := executeTestCmd(t, "owner/repo")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(err.Error(), "requires shell integration") {
+		t.Fatalf("error = %q, want shell integration guidance", err)
+	}
+}
+
+func TestCmdHelpCombinesRepositoryUsageAndSubcommands(t *testing.T) {
+	stdout, stderr, err := executeTestCmd(t, "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"gh cd <repository> [-- <gitflags>...]",
+		"--mkdir",
+		"--no-upstream",
+		"--upstream-remote-name",
+		"init",
+		"path",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("help does not contain %q:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
 func TestCmdRejectsExtraArgsWithoutDash(t *testing.T) {
-	_, _, err := executeTestCmd(t, "owner/repo", "--depth=1")
+	_, _, err := executeTestCmd(t, "path", "owner/repo", "--depth=1")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -86,7 +123,7 @@ func TestCmdPreservesAuthenticationError(t *testing.T) {
 		Reply(401).
 		JSON(map[string]string{"message": "Bad credentials"})
 
-	_, _, err := executeTestCmd(t, "features")
+	_, _, err := executeTestCmd(t, "path", "features")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -105,7 +142,7 @@ func TestCmdPrintsExistingClone(t *testing.T) {
 	runTestGit(t, wantPath, "init", "-q")
 	runTestGit(t, wantPath, "remote", "add", "origin", "https://github.com/owner/repo.git")
 
-	stdout, stderr, err := executeTestCmd(t, "owner/repo")
+	stdout, stderr, err := executeTestCmd(t, "path", "owner/repo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +324,7 @@ func TestCmdRejectsExistingNonDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout, _, err := executeTestCmd(t, "owner/repo")
+	stdout, _, err := executeTestCmd(t, "path", "owner/repo")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -300,7 +337,7 @@ func TestCmdClonesMissingRepository(t *testing.T) {
 	home := setTestHome(t)
 	logPath := installFakeGH(t)
 
-	stdout, stderr, err := executeTestCmd(t, "owner/repo", "--no-upstream", "--upstream-remote-name", "parent", "--", "--depth=1")
+	stdout, stderr, err := executeTestCmd(t, "path", "owner/repo", "--no-upstream", "--upstream-remote-name", "parent", "--", "--depth=1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +375,7 @@ func TestCmdCloneFailureDoesNotPrintDirectory(t *testing.T) {
 	installFakeGH(t)
 	t.Setenv("GH_CD_FAKE_EXIT", "7")
 
-	stdout, stderr, err := executeTestCmd(t, "owner/repo")
+	stdout, stderr, err := executeTestCmd(t, "path", "owner/repo")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -358,7 +395,7 @@ func TestCmdMkdirInitializesRepository(t *testing.T) {
 	home := setTestHome(t)
 	logPath := installFakeGH(t)
 
-	stdout, stderr, err := executeTestCmd(t, "owner/repo", "--mkdir")
+	stdout, stderr, err := executeTestCmd(t, "path", "owner/repo", "--mkdir")
 	if err != nil {
 		t.Fatalf("err = %v, stderr = %q", err, stderr)
 	}
@@ -395,15 +432,86 @@ func TestCmdInitZsh(t *testing.T) {
 	}
 }
 
-func TestCmdInitZshWrapGH(t *testing.T) {
-	stdout, stderr, err := executeTestCmd(t, "init", "zsh", "--wrap-gh")
+func TestZshInitDispatchesExtensionCommandsAndRepositories(t *testing.T) {
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh is not installed")
+	}
+
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "repository")
+	if err := os.Mkdir(destination, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "calls")
+	ghPath := filepath.Join(dir, "gh")
+	fakeGH, err := os.ReadFile("testdata/fake-gh.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stdout != zshWrapGHInit {
-		t.Fatalf("stdout = %q, want %q", stdout, zshWrapGHInit)
+	if err := os.WriteFile(ghPath, fakeGH, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
+
+	integration, err := os.ReadFile("testdata/integration.zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := zshInit + "\n" + string(integration)
+	command := exec.Command("zsh", "-c", script)
+	command.Env = append(os.Environ(),
+		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GH_CD_DISPATCH_LOG="+logPath,
+		"GH_CD_DISPATCH_DESTINATION="+destination,
+	)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("zsh integration failed: %v\n%s", err, output)
+	}
+	wantOutput := "combined piped help\nshell init\n" + destination + "\npath_unchanged=yes\nlive stdout\nlive stderr\n" + destination + "\nclone failed\nfailure=7 unchanged=yes"
+	if got := strings.TrimSpace(string(output)); got != wantOutput {
+		t.Fatalf("output = %q, want %q", got, wantOutput)
+	}
+
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCalls := "cd --help\ncd init zsh\ncd path owner/repo\ncd owner/repo\ncd broken\n"
+	if string(calls) != wantCalls {
+		t.Fatalf("gh calls = %q, want %q", calls, wantCalls)
+	}
+
+	liveOutput, err := os.ReadFile("testdata/live-output.zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveCommand := exec.Command("zsh", "-c", zshInit+"\n"+string(liveOutput))
+	liveCommand.Env = command.Env
+	stdout, err := liveCommand.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := liveCommand.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := liveCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "clone stdout progress\n" {
+		t.Fatalf("live stdout = %q, err = %v", line, err)
+	}
+	if line, err := bufio.NewReader(stderr).ReadString('\n'); err != nil || line != "clone stderr progress\n" {
+		t.Fatalf("live stderr = %q, err = %v", line, err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- liveCommand.Wait() }()
+	select {
+	case err := <-done:
+		t.Fatalf("command completed before progress could be observed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }

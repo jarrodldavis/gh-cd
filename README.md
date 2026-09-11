@@ -1,11 +1,7 @@
 # gh-cd
 
-`gh-cd` is a GitHub CLI extension that resolves a repository argument to a
-local clone, cloning it first when necessary.
-
-The extension prints the local directory to stdout. It cannot change the parent
-shell process by itself, so the recommended Zsh integration is a small function
-that runs `cd` after the extension succeeds.
+`gh-cd` is a GitHub CLI extension that changes to a repository's local clone,
+cloning it first when necessary.
 
 ## Install
 
@@ -15,44 +11,25 @@ gh extension install jarrodldavis/gh-cd
 
 ## Zsh Setup
 
-Add this to `.zshrc` to define a `ghcd` helper:
+Add this to `.zshrc` to define `gh cd`:
 
 ```zsh
 eval "$(gh cd init zsh)"
 ```
 
-This defines:
-
-```zsh
-ghcd() {
-  local dir
-  dir="$(gh cd "$@")" || return
-  builtin cd -- "$dir"
-}
-```
-
-If you prefer `gh cd <repo>` syntax, use the opt-in wrapper instead:
-
-```zsh
-eval "$(gh cd init zsh --wrap-gh)"
-```
-
-That defines a `gh()` function that intercepts only `gh cd` and forwards all
-other `gh` commands to the real GitHub CLI executable.
+This defines a `gh()` function that forwards every invocation to the real GitHub
+CLI executable. The extension sends a private action to the wrapper when a
+successful `gh cd <repository>` invocation should change directories. Normal
+standard output and standard error remain connected to the terminal, so clone
+progress and help output are displayed as usual.
 
 ## Usage
 
 ```sh
-ghcd cli/cli
-ghcd jarrodldavis/gh-cd
-ghcd https://github.com/cli/cli
-ghcd git@github.com:cli/cli.git
-```
-
-With `--wrap-gh`, use the same arguments through `gh cd`:
-
-```sh
 gh cd cli/cli
+gh cd jarrodldavis/gh-cd
+gh cd https://github.com/cli/cli
+gh cd git@github.com:cli/cli.git
 ```
 
 Repositories are cloned under:
@@ -83,21 +60,21 @@ Afterward, ordinary `git fetch` makes review tips available as refs such as
 Pass additional `git clone` flags after `--`:
 
 ```sh
-ghcd cli/cli -- --depth=1
+gh cd cli/cli -- --depth=1
 ```
 
 Clone options supported by `gh repo clone` can be passed before `--`:
 
 ```sh
-ghcd cli/cli --no-upstream
-ghcd cli/cli --upstream-remote-name parent
+gh cd cli/cli --no-upstream
+gh cd cli/cli --upstream-remote-name parent
 ```
 
 To initialize an empty local Git repository without checking or cloning the
 requested remote, pass `--mkdir`:
 
 ```sh
-ghcd owner/new-repository --mkdir
+gh cd owner/new-repository --mkdir
 ```
 
 If the local directory already exists, it is used as usual.
