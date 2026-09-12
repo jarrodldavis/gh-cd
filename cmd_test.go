@@ -1,25 +1,33 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/spf13/cobra"
 	"gopkg.in/h2non/gock.v1"
 )
 
 func executeTestCmd(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
+	return executeCommand(t, cmd(), args...)
+}
 
+func executeCommand(t *testing.T, cmd *cobra.Command, args ...string) (string, string, error) {
+	t.Helper()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd := cmd()
 	cmd.SilenceErrors = true
 	cmd.SilenceUsage = true
 	cmd.SetOut(&stdout)
@@ -64,16 +72,168 @@ exit "${GH_CD_FAKE_EXIT:-0}"
 }
 
 func TestCmdRequiresRepository(t *testing.T) {
-	_, _, err := executeTestCmd(t)
+	_, _, err := executeTestCmd(t, "path")
 	if err == nil {
 		t.Fatal("expected error")
 	}
 }
 
-func TestCmdRejectsExtraArgsWithoutDash(t *testing.T) {
-	_, _, err := executeTestCmd(t, "owner/repo", "--depth=1")
+func TestCmdWithoutShellIntegrationErrors(t *testing.T) {
+	stdout, _, err := executeTestCmd(t, "owner/repo")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(err.Error(), "requires shell integration") {
+		t.Fatalf("error = %q, want shell integration guidance", err)
+	}
+}
+
+func TestCmdWritesShellAction(t *testing.T) {
+	home := setTestHome(t)
+	wantPath := filepath.Join(home, "git", "github.com", "owner", "repo")
+	if err := os.MkdirAll(wantPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runTestGit(t, wantPath, "init", "-q")
+
+	var action bytes.Buffer
+	stdout, _, err := executeCommand(t, cmdWithAction(&action), "owner/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if want := "cd\n" + wantPath + "\n"; action.String() != want {
+		t.Fatalf("action = %q, want %q", action.String(), want)
+	}
+}
+
+func TestCmdDisambiguatesSubcommandNamesAsRepositories(t *testing.T) {
+	for _, name := range []string{"init", "path"} {
+		t.Run(name, func(t *testing.T) {
+			home := setTestHome(t)
+			t.Setenv("GH_TOKEN", "test-token")
+			defer gock.Off()
+			gock.New("https://api.github.com/").
+				Get("/user").
+				Reply(200).
+				JSON(map[string]string{"login": "owner"})
+
+			wantPath := filepath.Join(home, "git", "github.com", "owner", name)
+			if err := os.MkdirAll(wantPath, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			runTestGit(t, wantPath, "init", "-q")
+
+			var action bytes.Buffer
+			_, _, err := executeCommand(t, cmdWithAction(&action), "--", name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "cd\n" + wantPath + "\n"; action.String() != want {
+				t.Fatalf("action = %q, want %q", action.String(), want)
+			}
+		})
+	}
+}
+
+func TestCmdDisambiguatedRepositoryForwardsCloneOptions(t *testing.T) {
+	home := setTestHome(t)
+	logPath := installFakeGH(t)
+	t.Setenv("GH_TOKEN", "test-token")
+	defer gock.Off()
+	gock.New("https://api.github.com/").
+		Get("/user").
+		Reply(200).
+		JSON(map[string]string{"login": "owner"})
+
+	var action bytes.Buffer
+	_, _, err := executeCommand(t, cmdWithAction(&action), "--no-upstream", "--", "path", "--", "--depth=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	local := filepath.Join(home, "git", "github.com", "owner", "path")
+	wantCloneArgs := []string{
+		"repo",
+		"clone",
+		"owner/path",
+		local,
+		"--no-upstream",
+		"--",
+		"--depth=1",
+	}
+	gotBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCloneArgs := strings.Split(strings.TrimSuffix(string(gotBytes), "\n"), "\n")
+	if diff := cmp.Diff(wantCloneArgs, gotCloneArgs); diff != "" {
+		t.Fatalf("clone args mismatch (-want +got):\n%s", diff)
+	}
+	if want := "cd\n" + local + "\n"; action.String() != want {
+		t.Fatalf("action = %q, want %q", action.String(), want)
+	}
+}
+
+func TestCmdRejectsNewlineInLocalPath(t *testing.T) {
+	home := setTestHome(t)
+	stdout, _, err := executeTestCmd(t, "path", "https://github.com/owner/repo%0A", "--mkdir")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(err.Error(), "local path contains a newline") {
+		t.Fatalf("error = %q, want newline error", err)
+	}
+	local := filepath.Join(home, "git", "github.com", "owner", "repo\n")
+	if _, err := os.Stat(local); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("newline path was created: %v", err)
+	}
+}
+
+func TestCmdHelpCombinesRepositoryUsageAndSubcommands(t *testing.T) {
+	stdout, stderr, err := executeTestCmd(t, "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"gh cd [--] <repository> [-- <gitflags>...]",
+		"--mkdir",
+		"--no-upstream",
+		"--upstream-remote-name",
+		"init",
+		"path",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("help does not contain %q:\n%s", want, stdout)
+		}
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestCmdRejectsCloneArgumentsWithoutDash(t *testing.T) {
+	for _, args := range [][]string{
+		{"owner/repo", "--depth=1"},
+		{"path", "owner/repo", "--depth=1"},
+		{"owner/repo", "extra"},
+		{"path", "owner/repo", "extra"},
+	} {
+		_, _, err := executeTestCmd(t, args...)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "pass git clone flags after '--'") {
+			t.Fatalf("error = %q, want clone flag separator guidance", err)
+		}
 	}
 }
 
@@ -86,7 +246,7 @@ func TestCmdPreservesAuthenticationError(t *testing.T) {
 		Reply(401).
 		JSON(map[string]string{"message": "Bad credentials"})
 
-	_, _, err := executeTestCmd(t, "features")
+	_, _, err := executeTestCmd(t, "path", "features")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -105,7 +265,7 @@ func TestCmdPrintsExistingClone(t *testing.T) {
 	runTestGit(t, wantPath, "init", "-q")
 	runTestGit(t, wantPath, "remote", "add", "origin", "https://github.com/owner/repo.git")
 
-	stdout, stderr, err := executeTestCmd(t, "owner/repo")
+	stdout, stderr, err := executeTestCmd(t, "path", "owner/repo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +447,7 @@ func TestCmdRejectsExistingNonDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stdout, _, err := executeTestCmd(t, "owner/repo")
+	stdout, _, err := executeTestCmd(t, "path", "owner/repo")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -300,7 +460,7 @@ func TestCmdClonesMissingRepository(t *testing.T) {
 	home := setTestHome(t)
 	logPath := installFakeGH(t)
 
-	stdout, stderr, err := executeTestCmd(t, "owner/repo", "--no-upstream", "--upstream-remote-name", "parent", "--", "--depth=1")
+	stdout, stderr, err := executeTestCmd(t, "path", "owner/repo", "--no-upstream", "--upstream-remote-name", "parent", "--", "--depth=1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -333,12 +493,51 @@ func TestCmdClonesMissingRepository(t *testing.T) {
 	}
 }
 
+func TestPathCmdUsesRepositoryFlagsBeforeSubcommand(t *testing.T) {
+	home := setTestHome(t)
+	logPath := installFakeGH(t)
+
+	stdout, _, err := executeTestCmd(t,
+		"--no-upstream",
+		"--upstream-remote-name", "parent",
+		"path", "owner/repo",
+		"--", "--depth=1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	local := filepath.Join(home, "git", "github.com", "owner", "repo")
+	wantCloneArgs := []string{
+		"repo",
+		"clone",
+		"owner/repo",
+		local,
+		"--no-upstream",
+		"--upstream-remote-name",
+		"parent",
+		"--",
+		"--depth=1",
+	}
+	gotBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCloneArgs := strings.Split(strings.TrimSuffix(string(gotBytes), "\n"), "\n")
+	if diff := cmp.Diff(wantCloneArgs, gotCloneArgs); diff != "" {
+		t.Fatalf("clone args mismatch (-want +got):\n%s", diff)
+	}
+	if stdout != local+"\n" {
+		t.Fatalf("stdout = %q, want %q", stdout, local+"\n")
+	}
+}
+
 func TestCmdCloneFailureDoesNotPrintDirectory(t *testing.T) {
 	setTestHome(t)
 	installFakeGH(t)
 	t.Setenv("GH_CD_FAKE_EXIT", "7")
 
-	stdout, stderr, err := executeTestCmd(t, "owner/repo")
+	stdout, stderr, err := executeTestCmd(t, "path", "owner/repo")
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -358,7 +557,7 @@ func TestCmdMkdirInitializesRepository(t *testing.T) {
 	home := setTestHome(t)
 	logPath := installFakeGH(t)
 
-	stdout, stderr, err := executeTestCmd(t, "owner/repo", "--mkdir")
+	stdout, stderr, err := executeTestCmd(t, "path", "owner/repo", "--mkdir")
 	if err != nil {
 		t.Fatalf("err = %v, stderr = %q", err, stderr)
 	}
@@ -395,15 +594,145 @@ func TestCmdInitZsh(t *testing.T) {
 	}
 }
 
-func TestCmdInitZshWrapGH(t *testing.T) {
-	stdout, stderr, err := executeTestCmd(t, "init", "zsh", "--wrap-gh")
+func TestZshInitDispatchesExtensionCommandsAndRepositories(t *testing.T) {
+	if _, err := exec.LookPath("zsh"); err != nil {
+		t.Skip("zsh is not installed")
+	}
+
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "repository")
+	if err := os.Mkdir(destination, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "calls")
+	ghPath := filepath.Join(dir, "gh")
+	fakeGH, err := os.ReadFile("testdata/fake-gh.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stdout != zshWrapGHInit {
-		t.Fatalf("stdout = %q, want %q", stdout, zshWrapGHInit)
+	if err := os.WriteFile(ghPath, fakeGH, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	if stderr != "" {
-		t.Fatalf("stderr = %q, want empty", stderr)
+
+	integration, err := os.ReadFile("testdata/integration.zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := zshInit + "\n" + string(integration)
+	command := exec.Command("zsh", "-c", script)
+	command.Env = append(os.Environ(),
+		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GH_CD_DISPATCH_LOG="+logPath,
+		"GH_CD_DISPATCH_DESTINATION="+destination,
+	)
+	var integrationStdout bytes.Buffer
+	var integrationStderr bytes.Buffer
+	command.Stdout = &integrationStdout
+	command.Stderr = &integrationStderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("zsh integration failed: %v\nstdout:\n%s\nstderr:\n%s", err, integrationStdout.String(), integrationStderr.String())
+	}
+	wantStdout := "combined piped help\nshell init\n" + destination + "\npath_unchanged=yes\nlive stdout\n" + destination + "\nfailure=7 unchanged=yes"
+	if got := strings.TrimSpace(integrationStdout.String()); got != wantStdout {
+		t.Fatalf("stdout = %q, want %q", got, wantStdout)
+	}
+	wantStderr := "live stderr\nclone failed"
+	if got := strings.TrimSpace(integrationStderr.String()); got != wantStderr {
+		t.Fatalf("stderr = %q, want %q", got, wantStderr)
+	}
+
+	calls, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCalls := "cd --help\ncd init zsh\ncd path owner/repo\ncd owner/repo\ncd broken\n"
+	if string(calls) != wantCalls {
+		t.Fatalf("gh calls = %q, want %q", calls, wantCalls)
+	}
+
+	liveOutput, err := os.ReadFile("testdata/live-output.zsh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveCommand := exec.Command("zsh", "-c", zshInit+"\n"+string(liveOutput))
+	liveCommand.Env = command.Env
+	stdout, err := liveCommand.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := liveCommand.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := liveCommand.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "clone stdout progress\n" {
+		t.Fatalf("live stdout = %q, err = %v", line, err)
+	}
+	if line, err := bufio.NewReader(stderr).ReadString('\n'); err != nil || line != "clone stderr progress\n" {
+		t.Fatalf("live stderr = %q, err = %v", line, err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- liveCommand.Wait() }()
+	select {
+	case err := <-done:
+		t.Fatalf("command completed before progress could be observed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGHLauncherPreservesActionDescriptor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell action descriptors are supported only on Unix")
+	}
+	ghPath, err := exec.LookPath("gh")
+	if err != nil {
+		t.Skip("gh is not installed")
+	}
+
+	dataDir := t.TempDir()
+	extensionDir := filepath.Join(dataDir, "gh", "extensions", "gh-fd-probe")
+	if err := os.MkdirAll(extensionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	probe, err := os.ReadFile("testdata/fd-probe.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(extensionDir, "gh-fd-probe"), probe, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	actionReader, actionWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer actionReader.Close()
+
+	command := exec.Command(ghPath, "fd-probe")
+	command.Env = append(os.Environ(),
+		"XDG_DATA_HOME="+dataDir,
+		"GH_CONFIG_DIR="+filepath.Join(dataDir, "config"),
+		"GH_NO_EXTENSION_UPDATE_NOTIFIER=1",
+	)
+	command.ExtraFiles = []*os.File{actionWriter}
+	if output, err := command.CombinedOutput(); err != nil {
+		actionWriter.Close()
+		t.Fatalf("gh extension invocation failed: %v\n%s", err, output)
+	}
+	if err := actionWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	action, err := io.ReadAll(actionReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(action) != "inherited\n" {
+		t.Fatalf("action = %q, want descriptor payload", action)
 	}
 }

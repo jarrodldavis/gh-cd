@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -18,97 +19,176 @@ import (
 )
 
 func cmd() *cobra.Command {
-	var mkdir bool
+	if os.Getenv("GH_CD_SHELL_FD") != "3" {
+		return cmdWithAction(nil)
+	}
+	// The Zsh wrapper opens fd 3 without FD_CLOEXEC. On Unix, GitHub CLI's
+	// os/exec-based extension launcher leaves inherited descriptors >= 3
+	// open, so this channel survives the intermediate `gh` process. Keep
+	// TestGHLauncherPreservesActionDescriptor as coverage for that contract.
+	return cmdWithAction(os.NewFile(3, "gh-cd-shell-action"))
+}
+
+func cmdWithAction(shellAction io.Writer) *cobra.Command {
+	options := &cdOptions{}
 	cmd := &cobra.Command{
 		DisableFlagsInUseLine: true,
+		Use:                   "cd [--] <repository> [-- <gitflags>...]",
+		Args:                  repositoryArgs,
+		Short:                 "Change to a local clone of a repository",
+		Long: heredoc.Docf(`
+			Change to a local clone of a repository, cloning it first when necessary.
+			Shell integration from %[1]sgh cd init zsh%[1]s is required because an external
+			command cannot change its parent shell's working directory.
 
-		Use: "gh cd <repository> [-- <gitflags>...]",
-		Args: func(cmd *cobra.Command, args []string) error {
-			dash := cmd.Flags().ArgsLenAtDash()
-			if len(args) == 0 || dash == 0 {
-				return errors.New("cannot cd: repository argument required")
+			Use %[1]sgh cd path%[1]s to print the local path without changing directories.
+			Pass additional %[1]sgit clone%[1]s flags by listing them after "--".
+		`, "`"),
+		Annotations: map[string]string{
+			cobra.CommandDisplayNameAnnotation: "gh cd",
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if shellAction == nil {
+				return errors.New("gh cd requires shell integration; run 'eval \"$(gh cd init zsh)\"'")
 			}
-			if dash >= 0 && dash != 1 {
-				return errors.New("cannot cd: too many arguments")
+			local, err := resolveRepository(cmd, args, options)
+			if err != nil {
+				return err
 			}
-			if dash < 0 && len(args) > 1 {
-				return errors.New("cannot cd: too many arguments\nSeparate git clone flags with '--'.")
+			if _, err := fmt.Fprintf(shellAction, "cd\n%s\n", local); err != nil {
+				return fmt.Errorf("cannot cd: failed to send shell action: %w", err)
 			}
 			return nil
 		},
+	}
+	configureRepositoryFlags(cmd, options, "help for gh cd")
+	cmd.AddCommand(pathCmd(options), initCmd())
+	return cmd
+}
+
+type cdOptions struct {
+	mkdir              bool
+	noUpstream         bool
+	upstreamRemoteName string
+}
+
+func pathCmd(options *cdOptions) *cobra.Command {
+	cmd := &cobra.Command{
+		DisableFlagsInUseLine: true,
+
+		Use:   "path <repository> [-- <gitflags>...]",
+		Args:  repositoryArgs,
 		Short: "Print the path to a local clone, creating the clone if necessary",
 		Long: heredoc.Docf(`
 			Print the path to a local clone, creating the clone if necessary.
-			Use %[1]sgh cd init zsh%[1]s to define a Zsh function that changes directories.
+			Use %[1]sgh cd init zsh%[1]s to define %[1]sgh cd%[1]s as a Zsh function that changes directories.
 			Pass additional %[1]sgit clone%[1]s flags by listing them after "--".
 		`, "`"),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			parsed, err := parse(args[0])
+			local, err := resolveRepository(cmd, args, options)
 			if err != nil {
-				return fmt.Errorf("cannot cd: %w", err)
+				return err
 			}
-
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return fmt.Errorf("cannot cd: failed to find home directory: %w", err)
-			}
-
-			localSegments := make([]string, 0, len(parsed.local)+2)
-			localSegments = append(localSegments, home, "git")
-			localSegments = append(localSegments, parsed.local...)
-			local := filepath.Join(localSegments...)
-
-			if info, err := os.Stat(local); errors.Is(err, os.ErrNotExist) && mkdir {
-				if err := initRepository(cmd.Context(), local); err != nil {
-					return fmt.Errorf("cannot cd: failed to initialize repository: %w", err)
-				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "initialized empty repository: %s\n", local)
-			} else if errors.Is(err, os.ErrNotExist) {
-				if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
-					return fmt.Errorf("cannot cd: failed to create parent directory: %w", err)
-				}
-				remote := parsed.remote.String()
-				ghargs := []string{"repo", "clone", remote, local}
-				ghargs = append(ghargs, cloneOptions(cmd)...)
-				if cmd.Flags().ArgsLenAtDash() == 1 {
-					ghargs = append(ghargs, "--")
-				}
-				ghargs = append(ghargs, args[1:]...)
-
-				if err := runClone(cmd.Context(), cmd.ErrOrStderr(), ghargs...); err != nil {
-					return err
-				}
-			} else if err != nil {
-				return fmt.Errorf("cannot cd: failed to stat: %w", err)
-			} else if !info.IsDir() {
-				return fmt.Errorf("cannot cd: local path exists but is not a directory: %s", local)
-			} else {
-				fmt.Fprintf(cmd.ErrOrStderr(), "using existing clone: %s\n", local)
-			}
-
-			if err := addReviewRefspecs(cmd.Context(), local); err != nil {
-				return fmt.Errorf("cannot cd: failed to configure code review refspecs: %w", err)
-			}
-
 			fmt.Fprintln(cmd.OutOrStdout(), local)
 			return nil
 		},
 	}
+	configureRepositoryFlags(cmd, options, "help for gh cd path")
+	return cmd
+}
 
-	cmd.Flags().BoolP("help", "h", false, "help for gh cd")
-	cmd.Flags().BoolVar(&mkdir, "mkdir", false, "initialize an empty repository instead of cloning")
-	cmd.Flags().Bool("no-upstream", false, "do not add an upstream remote when cloning a fork")
-	cmd.Flags().StringP("upstream-remote-name", "u", "", "upstream remote name when cloning a fork")
+func repositoryArgs(cmd *cobra.Command, args []string) error {
+	dash := cmd.Flags().ArgsLenAtDash()
+	if len(args) == 0 {
+		return errors.New("cannot cd: repository argument required")
+	}
+	if dash == 0 {
+		if len(args) == 1 {
+			return nil
+		}
+		if args[1] != "--" {
+			return errors.New("cannot cd: too many arguments; pass git clone flags after '--'")
+		}
+		return nil
+	}
+	if dash >= 0 && dash != 1 {
+		return errors.New("cannot cd: too many arguments; pass git clone flags after '--'")
+	}
+	if dash < 0 && len(args) > 1 {
+		return errors.New("cannot cd: too many arguments; pass git clone flags after '--'")
+	}
+	return nil
+}
 
-	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
-		if err == pflag.ErrHelp {
+func configureRepositoryFlags(cmd *cobra.Command, options *cdOptions, help string) {
+	cmd.Flags().BoolP("help", "h", false, help)
+	cmd.Flags().BoolVar(&options.mkdir, "mkdir", false, "initialize an empty repository instead of cloning")
+	cmd.Flags().BoolVar(&options.noUpstream, "no-upstream", false, "do not add an upstream remote when cloning a fork")
+	cmd.Flags().StringVarP(&options.upstreamRemoteName, "upstream-remote-name", "u", "", "upstream remote name when cloning a fork")
+	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		if errors.Is(err, pflag.ErrHelp) {
 			return err
 		}
-		return fmt.Errorf("%w\nSeparate git clone flags with '--'.", err)
+		return fmt.Errorf("%w; pass git clone flags after '--'", err)
 	})
-	cmd.AddCommand(initCmd())
+}
 
-	return cmd
+func resolveRepository(cmd *cobra.Command, args []string, options *cdOptions) (string, error) {
+	parsed, err := parse(args[0])
+	if err != nil {
+		return "", fmt.Errorf("cannot cd: %w", err)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot cd: failed to find home directory: %w", err)
+	}
+
+	localSegments := make([]string, 0, len(parsed.local)+2)
+	localSegments = append(localSegments, home, "git")
+	localSegments = append(localSegments, parsed.local...)
+	local := filepath.Join(localSegments...)
+	if strings.ContainsAny(local, "\r\n") {
+		return "", errors.New("cannot cd: local path contains a newline")
+	}
+
+	if info, err := os.Stat(local); errors.Is(err, os.ErrNotExist) && options.mkdir {
+		if err := initRepository(cmd.Context(), local); err != nil {
+			return "", fmt.Errorf("cannot cd: failed to initialize repository: %w", err)
+		}
+		fmt.Fprintf(cmd.ErrOrStderr(), "initialized empty repository: %s\n", local)
+	} else if errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
+			return "", fmt.Errorf("cannot cd: failed to create parent directory: %w", err)
+		}
+		remote := parsed.remote.String()
+		ghargs := []string{"repo", "clone", remote, local}
+		ghargs = append(ghargs, cloneOptions(cmd, options)...)
+		dash := cmd.Flags().ArgsLenAtDash()
+		if dash == 1 || (dash == 0 && len(args) > 1) {
+			ghargs = append(ghargs, "--")
+		}
+		if dash == 0 {
+			ghargs = append(ghargs, args[2:]...)
+		} else {
+			ghargs = append(ghargs, args[1:]...)
+		}
+
+		if err := runClone(cmd.Context(), cmd.ErrOrStderr(), ghargs...); err != nil {
+			return "", err
+		}
+	} else if err != nil {
+		return "", fmt.Errorf("cannot cd: failed to stat: %w", err)
+	} else if !info.IsDir() {
+		return "", fmt.Errorf("cannot cd: local path exists but is not a directory: %s", local)
+	} else {
+		fmt.Fprintf(cmd.ErrOrStderr(), "using existing clone: %s\n", local)
+	}
+
+	if err := addReviewRefspecs(cmd.Context(), local); err != nil {
+		return "", fmt.Errorf("cannot cd: failed to configure code review refspecs: %w", err)
+	}
+	return local, nil
 }
 
 func addReviewRefspecs(ctx context.Context, repo string) error {
@@ -242,23 +322,24 @@ func contains(values []string, value string) bool {
 	return false
 }
 
-func cloneOptions(cmd *cobra.Command) []string {
+func cloneOptions(cmd *cobra.Command, options *cdOptions) []string {
 	var args []string
-	flags := cmd.Flags()
+	if options.noUpstream {
+		args = append(args, "--no-upstream")
+	}
+	if flagChanged(cmd, "upstream-remote-name") {
+		args = append(args, "--upstream-remote-name", options.upstreamRemoteName)
+	}
+	return args
+}
 
-	if flags.Changed("no-upstream") {
-		value, _ := flags.GetBool("no-upstream")
-		if value {
-			args = append(args, "--no-upstream")
+func flagChanged(cmd *cobra.Command, name string) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		if current.Flags().Changed(name) {
+			return true
 		}
 	}
-
-	if flags.Changed("upstream-remote-name") {
-		value, _ := flags.GetString("upstream-remote-name")
-		args = append(args, "--upstream-remote-name", value)
-	}
-
-	return args
+	return false
 }
 
 func runClone(ctx context.Context, output io.Writer, args ...string) error {
@@ -283,7 +364,6 @@ func initRepository(ctx context.Context, repo string) error {
 }
 
 func initCmd() *cobra.Command {
-	var wrapGH bool
 	cmd := &cobra.Command{
 		Use:                   "init zsh",
 		DisableFlagsInUseLine: true,
@@ -293,33 +373,12 @@ func initCmd() *cobra.Command {
 			if args[0] != "zsh" {
 				return fmt.Errorf("unsupported shell %q", args[0])
 			}
-			if wrapGH {
-				fmt.Fprint(cmd.OutOrStdout(), zshWrapGHInit)
-				return nil
-			}
 			fmt.Fprint(cmd.OutOrStdout(), zshInit)
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&wrapGH, "wrap-gh", false, "define a gh function that handles gh cd")
 	return cmd
 }
 
-const zshInit = `ghcd() {
-  local dir
-  dir="$(gh cd "$@")" || return
-  builtin cd -- "$dir"
-}
-`
-
-const zshWrapGHInit = `gh() {
-  if [[ "$1" == "cd" ]]; then
-    shift
-    local dir
-    dir="$(command gh cd "$@")" || return
-    builtin cd -- "$dir"
-  else
-    command gh "$@"
-  fi
-}
-`
+//go:embed shell/init.zsh
+var zshInit string
