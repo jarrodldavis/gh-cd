@@ -112,6 +112,92 @@ func TestCmdWritesShellAction(t *testing.T) {
 	}
 }
 
+func TestCmdDisambiguatesSubcommandNamesAsRepositories(t *testing.T) {
+	for _, name := range []string{"init", "path"} {
+		t.Run(name, func(t *testing.T) {
+			home := setTestHome(t)
+			t.Setenv("GH_TOKEN", "test-token")
+			defer gock.Off()
+			gock.New("https://api.github.com/").
+				Get("/user").
+				Reply(200).
+				JSON(map[string]string{"login": "owner"})
+
+			wantPath := filepath.Join(home, "git", "github.com", "owner", name)
+			if err := os.MkdirAll(wantPath, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			runTestGit(t, wantPath, "init", "-q")
+
+			var action bytes.Buffer
+			_, _, err := executeCommand(t, cmdWithAction(&action), "--", name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := "cd\n" + wantPath + "\n"; action.String() != want {
+				t.Fatalf("action = %q, want %q", action.String(), want)
+			}
+		})
+	}
+}
+
+func TestCmdDisambiguatedRepositoryForwardsCloneOptions(t *testing.T) {
+	home := setTestHome(t)
+	logPath := installFakeGH(t)
+	t.Setenv("GH_TOKEN", "test-token")
+	defer gock.Off()
+	gock.New("https://api.github.com/").
+		Get("/user").
+		Reply(200).
+		JSON(map[string]string{"login": "owner"})
+
+	var action bytes.Buffer
+	_, _, err := executeCommand(t, cmdWithAction(&action), "--no-upstream", "--", "path", "--", "--depth=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	local := filepath.Join(home, "git", "github.com", "owner", "path")
+	wantCloneArgs := []string{
+		"repo",
+		"clone",
+		"owner/path",
+		local,
+		"--no-upstream",
+		"--",
+		"--depth=1",
+	}
+	gotBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCloneArgs := strings.Split(strings.TrimSuffix(string(gotBytes), "\n"), "\n")
+	if diff := cmp.Diff(wantCloneArgs, gotCloneArgs); diff != "" {
+		t.Fatalf("clone args mismatch (-want +got):\n%s", diff)
+	}
+	if want := "cd\n" + local + "\n"; action.String() != want {
+		t.Fatalf("action = %q, want %q", action.String(), want)
+	}
+}
+
+func TestCmdRejectsNewlineInLocalPath(t *testing.T) {
+	home := setTestHome(t)
+	stdout, _, err := executeTestCmd(t, "path", "https://github.com/owner/repo%0A", "--mkdir")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if !strings.Contains(err.Error(), "local path contains a newline") {
+		t.Fatalf("error = %q, want newline error", err)
+	}
+	local := filepath.Join(home, "git", "github.com", "owner", "repo\n")
+	if _, err := os.Stat(local); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("newline path was created: %v", err)
+	}
+}
+
 func TestCmdHelpCombinesRepositoryUsageAndSubcommands(t *testing.T) {
 	stdout, stderr, err := executeTestCmd(t, "--help")
 	if err != nil {

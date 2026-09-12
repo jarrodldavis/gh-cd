@@ -39,6 +39,21 @@ directories, use `gh cd path`:
 gh cd path cli/cli
 ```
 
+The names `init` and `path` are reserved for subcommands. To use either as a
+one-component repository name, separate it from command parsing with `--`:
+
+```sh
+gh cd -- path
+gh cd -- init
+```
+
+Place `gh cd` flags before the first separator. For a reserved repository name,
+use a second separator before flags forwarded to `git clone`:
+
+```sh
+gh cd --no-upstream -- path -- --depth=1
+```
+
 Repositories are cloned under:
 
 ```text

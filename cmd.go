@@ -100,8 +100,17 @@ func pathCmd() *cobra.Command {
 
 func repositoryArgs(cmd *cobra.Command, args []string) error {
 	dash := cmd.Flags().ArgsLenAtDash()
-	if len(args) == 0 || dash == 0 {
+	if len(args) == 0 {
 		return errors.New("cannot cd: repository argument required")
+	}
+	if dash == 0 {
+		if len(args) == 1 {
+			return nil
+		}
+		if args[1] != "--" {
+			return errors.New("cannot cd: too many arguments\nSeparate git clone flags with '--'.")
+		}
+		return nil
 	}
 	if dash >= 0 && dash != 1 {
 		return errors.New("cannot cd: too many arguments")
@@ -140,6 +149,9 @@ func resolveRepository(cmd *cobra.Command, args []string, options *cdOptions) (s
 	localSegments = append(localSegments, home, "git")
 	localSegments = append(localSegments, parsed.local...)
 	local := filepath.Join(localSegments...)
+	if strings.ContainsAny(local, "\r\n") {
+		return "", errors.New("cannot cd: local path contains a newline")
+	}
 
 	if info, err := os.Stat(local); errors.Is(err, os.ErrNotExist) && options.mkdir {
 		if err := initRepository(cmd.Context(), local); err != nil {
@@ -153,10 +165,15 @@ func resolveRepository(cmd *cobra.Command, args []string, options *cdOptions) (s
 		remote := parsed.remote.String()
 		ghargs := []string{"repo", "clone", remote, local}
 		ghargs = append(ghargs, cloneOptions(cmd, options)...)
-		if cmd.Flags().ArgsLenAtDash() == 1 {
+		dash := cmd.Flags().ArgsLenAtDash()
+		if dash == 1 || (dash == 0 && len(args) > 1) {
 			ghargs = append(ghargs, "--")
 		}
-		ghargs = append(ghargs, args[1:]...)
+		if dash == 0 {
+			ghargs = append(ghargs, args[2:]...)
+		} else {
+			ghargs = append(ghargs, args[1:]...)
+		}
 
 		if err := runClone(cmd.Context(), cmd.ErrOrStderr(), ghargs...); err != nil {
 			return "", err
