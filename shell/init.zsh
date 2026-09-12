@@ -1,5 +1,5 @@
 gh() {
-  if [[ "$1" != "cd" ]]; then
+  if [[ "${1-}" != "cd" ]]; then
     command gh "$@"
     return
   fi

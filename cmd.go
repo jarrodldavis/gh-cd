@@ -22,7 +22,7 @@ func cmd() *cobra.Command {
 	if os.Getenv("GH_CD_SHELL_FD") != "3" {
 		return cmdWithAction(nil)
 	}
-	// The Zsh wrapper opens fd 3 without FD_CLOEXEC. On Unix, GitHub CLI's
+	// The shell wrapper opens fd 3 without FD_CLOEXEC. On Unix, GitHub CLI's
 	// os/exec-based extension launcher leaves inherited descriptors >= 3
 	// open, so this channel survives the intermediate `gh` process. Keep
 	// TestGHLauncherPreservesActionDescriptor as coverage for that contract.
@@ -38,7 +38,7 @@ func cmdWithAction(shellAction io.Writer) *cobra.Command {
 		Short:                 "Change to a local clone of a repository",
 		Long: heredoc.Docf(`
 			Change to a local clone of a repository, cloning it first when necessary.
-			Shell integration from %[1]sgh cd init zsh%[1]s is required because an external
+			Shell integration from %[1]sgh cd init bash%[1]s or %[1]sgh cd init zsh%[1]s is required because an external
 			command cannot change its parent shell's working directory.
 
 			Use %[1]sgh cd path%[1]s to print the local path without changing directories.
@@ -49,7 +49,7 @@ func cmdWithAction(shellAction io.Writer) *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if shellAction == nil {
-				return errors.New("gh cd requires shell integration; run 'eval \"$(gh cd init zsh)\"'")
+				return errors.New("gh cd requires shell integration; run 'eval \"$(gh cd init <shell>)\"'")
 			}
 			local, err := resolveRepository(cmd, args, options)
 			if err != nil {
@@ -81,7 +81,7 @@ func pathCmd(options *cdOptions) *cobra.Command {
 		Short: "Print the path to a local clone, creating the clone if necessary",
 		Long: heredoc.Docf(`
 			Print the path to a local clone, creating the clone if necessary.
-			Use %[1]sgh cd init zsh%[1]s to define %[1]sgh cd%[1]s as a Zsh function that changes directories.
+			Use %[1]sgh cd init <shell>%[1]s to define %[1]sgh cd%[1]s as a shell function that changes directories.
 			Pass additional %[1]sgit clone%[1]s flags by listing them after "--".
 		`, "`"),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -365,20 +365,29 @@ func initRepository(ctx context.Context, repo string) error {
 
 func initCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:                   "init zsh",
+		Use:                   "init <shell>",
 		DisableFlagsInUseLine: true,
 		Args:                  cobra.ExactArgs(1),
 		Short:                 "Print shell integration for gh-cd",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if args[0] != "zsh" {
+			var init string
+			switch args[0] {
+			case "bash":
+				init = bashInit
+			case "zsh":
+				init = zshInit
+			default:
 				return fmt.Errorf("unsupported shell %q", args[0])
 			}
-			fmt.Fprint(cmd.OutOrStdout(), zshInit)
+			fmt.Fprint(cmd.OutOrStdout(), init)
 			return nil
 		},
 	}
 	return cmd
 }
+
+//go:embed shell/init.bash
+var bashInit string
 
 //go:embed shell/init.zsh
 var zshInit string

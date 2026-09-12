@@ -9,9 +9,15 @@ cloning it first when necessary.
 gh extension install jarrodldavis/gh-cd
 ```
 
-## Zsh Setup
+## Shell Setup
 
-Add this to `.zshrc` to define `gh cd`:
+For Bash, add this to `.bashrc` to define `gh cd`:
+
+```bash
+eval "$(gh cd init bash)"
+```
+
+For Zsh, add this to `.zshrc`:
 
 ```zsh
 eval "$(gh cd init zsh)"
