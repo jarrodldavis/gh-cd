@@ -93,6 +93,7 @@ func parse(s string) (*parsed, error) {
 		if parsed == nil {
 			return nil, errInvalidRepository
 		}
+		parsed.cloneRemote = s
 		return parsed, nil
 	} else if host, path, found := strings.Cut(s, ":"); found {
 		if len(host) == 0 || len(path) == 0 {

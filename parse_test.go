@@ -6,10 +6,14 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"gopkg.in/h2non/gock.v1"
 )
 
-var diffOpts = cmp.AllowUnexported(parsed{}, url.Userinfo{})
+var diffOpts = cmp.Options{
+	cmp.AllowUnexported(parsed{}, url.Userinfo{}),
+	cmpopts.IgnoreFields(parsed{}, "cloneRemote"),
+}
 
 func assertParse(input string, want parsed) func(t *testing.T) {
 	return func(t *testing.T) {
@@ -239,34 +243,47 @@ func TestParseFTPSyntax(t *testing.T) {
 
 func TestParseSCPSyntax(t *testing.T) {
 	t.Run("NoUser", assertParse("host.xz:path/to/repo/", parsed{
-		local:       []string{"host.xz", "path", "to", "repo"},
-		remote:      &url.URL{Scheme: "ssh", Host: "host.xz", Path: "/path/to/repo.git"},
-		cloneRemote: "host.xz:path/to/repo/",
+		local:  []string{"host.xz", "path", "to", "repo"},
+		remote: &url.URL{Scheme: "ssh", Host: "host.xz", Path: "/path/to/repo.git"},
 	}))
 
 	t.Run("NoUserWithSuffix", assertParse("host.xz:path/to/repo.git/", parsed{
-		local:       []string{"host.xz", "path", "to", "repo"},
-		remote:      &url.URL{Scheme: "ssh", Host: "host.xz", Path: "/path/to/repo.git"},
-		cloneRemote: "host.xz:path/to/repo.git/",
+		local:  []string{"host.xz", "path", "to", "repo"},
+		remote: &url.URL{Scheme: "ssh", Host: "host.xz", Path: "/path/to/repo.git"},
 	}))
 
 	t.Run("WithUser", assertParse("user@host.xz:path/to/repo/", parsed{
-		local:       []string{"host.xz", "path", "to", "repo"},
-		remote:      &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
-		cloneRemote: "user@host.xz:path/to/repo/",
+		local:  []string{"host.xz", "path", "to", "repo"},
+		remote: &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
 	}))
 
 	t.Run("WithUserWithSuffix", assertParse("user@host.xz:path/to/repo.git/", parsed{
-		local:       []string{"host.xz", "path", "to", "repo"},
-		remote:      &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
-		cloneRemote: "user@host.xz:path/to/repo.git/",
+		local:  []string{"host.xz", "path", "to", "repo"},
+		remote: &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
 	}))
 
 	t.Run("AbsolutePath", assertParse("user@host.xz:/path/to/repo.git", parsed{
-		local:       []string{"host.xz", "path", "to", "repo"},
-		remote:      &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
-		cloneRemote: "user@host.xz:/path/to/repo.git",
+		local:  []string{"host.xz", "path", "to", "repo"},
+		remote: &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
 	}))
+}
+
+func TestParsePreservesCloneRemote(t *testing.T) {
+	for _, input := range []string{
+		"https://host.xz/path/to/repo",
+		"git@host.xz:path/to/repo.git",
+		"git@host.xz:/srv/git/repo.git",
+	} {
+		t.Run(input, func(t *testing.T) {
+			got, err := parse(input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.cloneRemote != input {
+				t.Fatalf("cloneRemote = %q, want %q", got.cloneRemote, input)
+			}
+		})
+	}
 }
 
 func TestParseInvalid(t *testing.T) {

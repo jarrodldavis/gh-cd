@@ -508,7 +508,7 @@ func TestCloneRepositoryUsesGitForExplicitURL(t *testing.T) {
 	t.Setenv("GH_CD_FAKE_ARGS", logPath)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	repo, err := parse("https://gitlab.archlinux.org/archlinux/alpm/alpm.git")
+	repo, err := parse("https://gitlab.archlinux.org/archlinux/alpm/alpm")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +526,7 @@ func TestCloneRepositoryUsesGitForExplicitURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "clone\n--depth=1\n--\nhttps://gitlab.archlinux.org/archlinux/alpm/alpm.git\n/tmp/alpm\n"
+	want := "clone\n--depth=1\n--\nhttps://gitlab.archlinux.org/archlinux/alpm/alpm\n/tmp/alpm\n"
 	if got := string(gotBytes); got != want {
 		t.Fatalf("git clone args = %q, want %q", got, want)
 	}
@@ -571,6 +571,40 @@ func TestCloneRepositoryPreservesSCPRemote(t *testing.T) {
 				t.Fatalf("git clone args = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+func TestCloneRepositoryRejectsGitHubOnlyOptionsForGitFallback(t *testing.T) {
+	dir := t.TempDir()
+	gitLog := filepath.Join(dir, "git-called")
+	commands := map[string]string{
+		"git": "#!/bin/sh\ntouch \"$GH_CD_FAKE_GIT_LOG\"\n",
+		"gh":  "#!/bin/sh\nexit 1\n",
+	}
+	for name, script := range commands {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("GH_CD_FAKE_GIT_LOG", gitLog)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	repo, err := parse("https://gitlab.example/group/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.Flags().Bool("no-upstream", false, "")
+	if err := command.Flags().Set("no-upstream", "true"); err != nil {
+		t.Fatal(err)
+	}
+	err = cloneRepository(command, io.Discard, repo, "/tmp/repo", []string{"repository"}, &cdOptions{noUpstream: true})
+	if err == nil || !strings.Contains(err.Error(), "only supported for GitHub repositories") {
+		t.Fatalf("error = %v, want GitHub-only option error", err)
+	}
+	if _, err := os.Stat(gitLog); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("git clone was invoked: %v", err)
 	}
 }
 
