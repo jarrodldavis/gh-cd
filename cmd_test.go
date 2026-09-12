@@ -594,9 +594,31 @@ func TestCmdInitZsh(t *testing.T) {
 	}
 }
 
+func TestCmdInitBash(t *testing.T) {
+	stdout, stderr, err := executeTestCmd(t, "init", "bash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stdout != bashInit {
+		t.Fatalf("stdout = %q, want %q", stdout, bashInit)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+}
+
+func TestBashInitDispatchesExtensionCommandsAndRepositories(t *testing.T) {
+	testShellInitDispatch(t, "bash", bashInit)
+}
+
 func TestZshInitDispatchesExtensionCommandsAndRepositories(t *testing.T) {
-	if _, err := exec.LookPath("zsh"); err != nil {
-		t.Skip("zsh is not installed")
+	testShellInitDispatch(t, "zsh", zshInit)
+}
+
+func testShellInitDispatch(t *testing.T, shell string, shellInit string) {
+	t.Helper()
+	if _, err := exec.LookPath(shell); err != nil {
+		t.Skipf("%s is not installed", shell)
 	}
 
 	dir := t.TempDir()
@@ -614,12 +636,12 @@ func TestZshInitDispatchesExtensionCommandsAndRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	integration, err := os.ReadFile("testdata/integration.zsh")
+	integration, err := os.ReadFile("testdata/integration." + shell)
 	if err != nil {
 		t.Fatal(err)
 	}
-	script := zshInit + "\n" + string(integration)
-	command := exec.Command("zsh", "-c", script)
+	script := shellInit + "\n" + string(integration)
+	command := exec.Command(shell, "-c", script)
 	command.Env = append(os.Environ(),
 		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GH_CD_DISPATCH_LOG="+logPath,
@@ -630,7 +652,7 @@ func TestZshInitDispatchesExtensionCommandsAndRepositories(t *testing.T) {
 	command.Stdout = &integrationStdout
 	command.Stderr = &integrationStderr
 	if err := command.Run(); err != nil {
-		t.Fatalf("zsh integration failed: %v\nstdout:\n%s\nstderr:\n%s", err, integrationStdout.String(), integrationStderr.String())
+		t.Fatalf("%s integration failed: %v\nstdout:\n%s\nstderr:\n%s", shell, err, integrationStdout.String(), integrationStderr.String())
 	}
 	wantStdout := "combined piped help\nshell init\n" + destination + "\npath_unchanged=yes\nlive stdout\n" + destination + "\nfailure=7 unchanged=yes"
 	if got := strings.TrimSpace(integrationStdout.String()); got != wantStdout {
@@ -645,16 +667,16 @@ func TestZshInitDispatchesExtensionCommandsAndRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := "cd --help\ncd init zsh\ncd path owner/repo\ncd owner/repo\ncd broken\n"
+	wantCalls := "\ncd --help\ncd init " + shell + "\ncd path owner/repo\ncd owner/repo\ncd broken\n"
 	if string(calls) != wantCalls {
 		t.Fatalf("gh calls = %q, want %q", calls, wantCalls)
 	}
 
-	liveOutput, err := os.ReadFile("testdata/live-output.zsh")
+	liveOutput, err := os.ReadFile("testdata/live-output." + shell)
 	if err != nil {
 		t.Fatal(err)
 	}
-	liveCommand := exec.Command("zsh", "-c", zshInit+"\n"+string(liveOutput))
+	liveCommand := exec.Command(shell, "-c", shellInit+"\n"+string(liveOutput))
 	liveCommand.Env = command.Env
 	stdout, err := liveCommand.StdoutPipe()
 	if err != nil {

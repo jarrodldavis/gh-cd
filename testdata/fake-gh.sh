@@ -3,7 +3,7 @@
 printf '%s\n' "$*" >> "$GH_CD_DISPATCH_LOG"
 case "$*" in
   "cd --help") printf 'combined help\n' ;;
-  "cd init zsh") printf 'shell init\n' ;;
+  "cd init bash"|"cd init zsh") printf 'shell init\n' ;;
   "cd path owner/repo") printf '%s\n' "$GH_CD_DISPATCH_DESTINATION" ;;
   "cd owner/repo")
     printf 'live stdout\n'

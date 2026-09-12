@@ -1,3 +1,5 @@
+set -u
+gh
 gh cd --help | sed 's/combined/combined piped/'
 gh cd init zsh
 before="$PWD"
