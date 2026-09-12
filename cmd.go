@@ -15,6 +15,7 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 func cmd() *cobra.Command {
@@ -106,15 +107,15 @@ func repositoryArgs(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		if args[1] != "--" {
-			return errors.New("cannot cd: too many arguments")
+			return errors.New("cannot cd: too many arguments; pass git clone flags after '--'")
 		}
 		return nil
 	}
 	if dash >= 0 && dash != 1 {
-		return errors.New("cannot cd: too many arguments")
+		return errors.New("cannot cd: too many arguments; pass git clone flags after '--'")
 	}
 	if dash < 0 && len(args) > 1 {
-		return errors.New("cannot cd: too many arguments")
+		return errors.New("cannot cd: too many arguments; pass git clone flags after '--'")
 	}
 	return nil
 }
@@ -124,6 +125,12 @@ func configureRepositoryFlags(cmd *cobra.Command, options *cdOptions, help strin
 	cmd.Flags().BoolVar(&options.mkdir, "mkdir", false, "initialize an empty repository instead of cloning")
 	cmd.Flags().BoolVar(&options.noUpstream, "no-upstream", false, "do not add an upstream remote when cloning a fork")
 	cmd.Flags().StringVarP(&options.upstreamRemoteName, "upstream-remote-name", "u", "", "upstream remote name when cloning a fork")
+	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		if errors.Is(err, pflag.ErrHelp) {
+			return err
+		}
+		return fmt.Errorf("%w; pass git clone flags after '--'", err)
+	})
 }
 
 func resolveRepository(cmd *cobra.Command, args []string, options *cdOptions) (string, error) {

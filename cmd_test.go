@@ -220,10 +220,20 @@ func TestCmdHelpCombinesRepositoryUsageAndSubcommands(t *testing.T) {
 	}
 }
 
-func TestCmdRejectsExtraArgsWithoutDash(t *testing.T) {
-	_, _, err := executeTestCmd(t, "path", "owner/repo", "--depth=1")
-	if err == nil {
-		t.Fatal("expected error")
+func TestCmdRejectsCloneArgumentsWithoutDash(t *testing.T) {
+	for _, args := range [][]string{
+		{"owner/repo", "--depth=1"},
+		{"path", "owner/repo", "--depth=1"},
+		{"owner/repo", "extra"},
+		{"path", "owner/repo", "extra"},
+	} {
+		_, _, err := executeTestCmd(t, args...)
+		if err == nil {
+			t.Fatal("expected error")
+		}
+		if !strings.Contains(err.Error(), "pass git clone flags after '--'") {
+			t.Fatalf("error = %q, want clone flag separator guidance", err)
+		}
 	}
 }
 
