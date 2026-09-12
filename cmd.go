@@ -190,6 +190,9 @@ func cloneRepository(cmd *cobra.Command, output io.Writer, parsed *parsed, local
 		if len(cloneOptions(cmd, options)) != 0 {
 			return errors.New("cannot cd: --no-upstream and --upstream-remote-name are only supported for GitHub repositories")
 		}
+		if parsed.cloneRemote != "" {
+			remote = parsed.cloneRemote
+		}
 		gitArgs := append([]string{"clone"}, gitFlags...)
 		gitArgs = append(gitArgs, "--", remote, local)
 		return runGitClone(cmd.Context(), output, gitArgs...)

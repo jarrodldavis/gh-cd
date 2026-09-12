@@ -22,8 +22,9 @@ var acceptedSchemes = map[string]struct{}{
 }
 
 type parsed struct {
-	local  []string
-	remote *url.URL
+	local       []string
+	remote      *url.URL
+	cloneRemote string
 }
 
 func (p parsed) String() string {
@@ -69,7 +70,7 @@ func normalize(remote *url.URL) *parsed {
 	local = append(local, remote.Hostname())
 	local = append(local, segments...)
 
-	return &parsed{local, remote}
+	return &parsed{local: local, remote: remote}
 }
 
 func parse(s string) (*parsed, error) {
@@ -112,6 +113,7 @@ func parse(s string) (*parsed, error) {
 		if parsed == nil {
 			return nil, errInvalidRepository
 		}
+		parsed.cloneRemote = s
 		return parsed, nil
 	} else {
 		if !strings.Contains(s, "/") {
@@ -135,6 +137,6 @@ func parse(s string) (*parsed, error) {
 		}
 		remote := &url.URL{Path: path}
 		local := []string{repo.Host, repo.Owner, repo.Name}
-		return &parsed{local, remote}, nil
+		return &parsed{local: local, remote: remote}, nil
 	}
 }

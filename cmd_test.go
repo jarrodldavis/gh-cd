@@ -532,6 +532,48 @@ func TestCloneRepositoryUsesGitForExplicitURL(t *testing.T) {
 	}
 }
 
+func TestCloneRepositoryPreservesSCPRemote(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "args")
+	commands := map[string]string{
+		"git": "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GH_CD_FAKE_ARGS\"\n",
+		"gh":  "#!/bin/sh\nexit 1\n",
+	}
+	for name, script := range commands {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("GH_CD_FAKE_ARGS", logPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	for _, remote := range []string{
+		"git@gitlab.example:group/repo.git",
+		"git@gitlab.example:/srv/git/repo.git",
+	} {
+		t.Run(remote, func(t *testing.T) {
+			repo, err := parse(remote)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := &cobra.Command{}
+			command.SetContext(context.Background())
+			if err := cloneRepository(command, io.Discard, repo, "/tmp/repo", []string{"repository"}, &cdOptions{}); err != nil {
+				t.Fatal(err)
+			}
+
+			gotBytes, err := os.ReadFile(logPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "clone\n--\n" + remote + "\n/tmp/repo\n"
+			if got := string(gotBytes); got != want {
+				t.Fatalf("git clone args = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestShouldUseGitClone(t *testing.T) {
 	dir := t.TempDir()
 	ghPath := filepath.Join(dir, "gh")

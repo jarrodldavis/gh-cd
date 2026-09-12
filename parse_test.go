@@ -239,23 +239,33 @@ func TestParseFTPSyntax(t *testing.T) {
 
 func TestParseSCPSyntax(t *testing.T) {
 	t.Run("NoUser", assertParse("host.xz:path/to/repo/", parsed{
-		local:  []string{"host.xz", "path", "to", "repo"},
-		remote: &url.URL{Scheme: "ssh", Host: "host.xz", Path: "/path/to/repo.git"},
+		local:       []string{"host.xz", "path", "to", "repo"},
+		remote:      &url.URL{Scheme: "ssh", Host: "host.xz", Path: "/path/to/repo.git"},
+		cloneRemote: "host.xz:path/to/repo/",
 	}))
 
 	t.Run("NoUserWithSuffix", assertParse("host.xz:path/to/repo.git/", parsed{
-		local:  []string{"host.xz", "path", "to", "repo"},
-		remote: &url.URL{Scheme: "ssh", Host: "host.xz", Path: "/path/to/repo.git"},
+		local:       []string{"host.xz", "path", "to", "repo"},
+		remote:      &url.URL{Scheme: "ssh", Host: "host.xz", Path: "/path/to/repo.git"},
+		cloneRemote: "host.xz:path/to/repo.git/",
 	}))
 
 	t.Run("WithUser", assertParse("user@host.xz:path/to/repo/", parsed{
-		local:  []string{"host.xz", "path", "to", "repo"},
-		remote: &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
+		local:       []string{"host.xz", "path", "to", "repo"},
+		remote:      &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
+		cloneRemote: "user@host.xz:path/to/repo/",
 	}))
 
 	t.Run("WithUserWithSuffix", assertParse("user@host.xz:path/to/repo.git/", parsed{
-		local:  []string{"host.xz", "path", "to", "repo"},
-		remote: &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
+		local:       []string{"host.xz", "path", "to", "repo"},
+		remote:      &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
+		cloneRemote: "user@host.xz:path/to/repo.git/",
+	}))
+
+	t.Run("AbsolutePath", assertParse("user@host.xz:/path/to/repo.git", parsed{
+		local:       []string{"host.xz", "path", "to", "repo"},
+		remote:      &url.URL{Scheme: "ssh", User: url.User("user"), Host: "host.xz", Path: "/path/to/repo.git"},
+		cloneRemote: "user@host.xz:/path/to/repo.git",
 	}))
 }
 
