@@ -493,6 +493,79 @@ func TestCmdClonesMissingRepository(t *testing.T) {
 	}
 }
 
+func TestCloneRepositoryUsesGitForExplicitURL(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "args")
+	gitPath := filepath.Join(dir, "git")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GH_CD_FAKE_ARGS\"\n"
+	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GH_CD_FAKE_ARGS", logPath)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	repo, err := parse("https://gitlab.archlinux.org/archlinux/alpm/alpm.git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := &cobra.Command{}
+	command.SetContext(context.Background())
+	command.Flags().SetInterspersed(false)
+	if err := command.Flags().Parse([]string{"repository", "--", "--depth=1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cloneRepository(command, io.Discard, repo, "/tmp/alpm", []string{"repository", "--depth=1"}, &cdOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	gotBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "clone\n--depth=1\n--\nhttps://gitlab.archlinux.org/archlinux/alpm/alpm.git\n/tmp/alpm\n"
+	if got := string(gotBytes); got != want {
+		t.Fatalf("git clone args = %q, want %q", got, want)
+	}
+}
+
+func TestShouldUseGitClone(t *testing.T) {
+	dir := t.TempDir()
+	ghPath := filepath.Join(dir, "gh")
+	script := "#!/bin/sh\nexit \"${GH_CD_FAKE_EXIT:-0}\"\n"
+	if err := os.WriteFile(ghPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	tests := []struct {
+		name string
+		raw  string
+		exit string
+		want bool
+	}{
+		{name: "shorthand does not need probe", raw: "owner/repo", exit: "1", want: false},
+		{name: "gh resolves explicit URL", raw: "https://github.example/owner/repo.git", want: false},
+		{name: "gh rejects explicit URL", raw: "https://gitlab.archlinux.org/owner/repo.git", exit: "1", want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GH_CD_FAKE_EXIT", test.exit)
+			raw, want := test.raw, test.want
+			repo, err := parse(raw)
+			if err != nil {
+				t.Fatalf("parse(%q): %v", raw, err)
+			}
+			if got := shouldUseGitClone(context.Background(), repo.remote); got != want {
+				t.Errorf("shouldUseGitClone(%q) = %t, want %t", raw, got, want)
+			}
+		})
+	}
+}
+
 func TestPathCmdUsesRepositoryFlagsBeforeSubcommand(t *testing.T) {
 	home := setTestHome(t)
 	logPath := installFakeGH(t)
