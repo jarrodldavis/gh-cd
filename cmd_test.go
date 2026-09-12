@@ -204,7 +204,7 @@ func TestCmdHelpCombinesRepositoryUsageAndSubcommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
-		"gh cd <repository> [-- <gitflags>...]",
+		"gh cd [--] <repository> [-- <gitflags>...]",
 		"--mkdir",
 		"--no-upstream",
 		"--upstream-remote-name",
@@ -480,6 +480,45 @@ func TestCmdClonesMissingRepository(t *testing.T) {
 	}
 	if stderr != "clone stdout\nclone stderr\n" {
 		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestPathCmdUsesRepositoryFlagsBeforeSubcommand(t *testing.T) {
+	home := setTestHome(t)
+	logPath := installFakeGH(t)
+
+	stdout, _, err := executeTestCmd(t,
+		"--no-upstream",
+		"--upstream-remote-name", "parent",
+		"path", "owner/repo",
+		"--", "--depth=1",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	local := filepath.Join(home, "git", "github.com", "owner", "repo")
+	wantCloneArgs := []string{
+		"repo",
+		"clone",
+		"owner/repo",
+		local,
+		"--no-upstream",
+		"--upstream-remote-name",
+		"parent",
+		"--",
+		"--depth=1",
+	}
+	gotBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCloneArgs := strings.Split(strings.TrimSuffix(string(gotBytes), "\n"), "\n")
+	if diff := cmp.Diff(wantCloneArgs, gotCloneArgs); diff != "" {
+		t.Fatalf("clone args mismatch (-want +got):\n%s", diff)
+	}
+	if stdout != local+"\n" {
+		t.Fatalf("stdout = %q, want %q", stdout, local+"\n")
 	}
 }
 

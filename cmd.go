@@ -15,13 +15,16 @@ import (
 	"github.com/MakeNowJust/heredoc"
 	"github.com/cli/go-gh/v2"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 )
 
 func cmd() *cobra.Command {
 	if os.Getenv("GH_CD_SHELL_FD") != "3" {
 		return cmdWithAction(nil)
 	}
+	// The Zsh wrapper opens fd 3 without FD_CLOEXEC. On Unix, GitHub CLI's
+	// os/exec-based extension launcher leaves inherited descriptors >= 3
+	// open, so this channel survives the intermediate `gh` process. Keep
+	// TestGHLauncherPreservesActionDescriptor as coverage for that contract.
 	return cmdWithAction(os.NewFile(3, "gh-cd-shell-action"))
 }
 
@@ -29,7 +32,7 @@ func cmdWithAction(shellAction io.Writer) *cobra.Command {
 	options := &cdOptions{}
 	cmd := &cobra.Command{
 		DisableFlagsInUseLine: true,
-		Use:                   "cd <repository> [-- <gitflags>...]",
+		Use:                   "cd [--] <repository> [-- <gitflags>...]",
 		Args:                  repositoryArgs,
 		Short:                 "Change to a local clone of a repository",
 		Long: heredoc.Docf(`
@@ -51,10 +54,6 @@ func cmdWithAction(shellAction io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// The Zsh wrapper opens fd 3 without FD_CLOEXEC. On Unix, GitHub CLI's
-			// os/exec-based extension launcher leaves inherited descriptors >= 3
-			// open, so this channel survives the intermediate `gh` process. Keep
-			// TestGHLauncherPreservesActionDescriptor as coverage for that contract.
 			if _, err := fmt.Fprintf(shellAction, "cd\n%s\n", local); err != nil {
 				return fmt.Errorf("cannot cd: failed to send shell action: %w", err)
 			}
@@ -62,7 +61,7 @@ func cmdWithAction(shellAction io.Writer) *cobra.Command {
 		},
 	}
 	configureRepositoryFlags(cmd, options, "help for gh cd")
-	cmd.AddCommand(pathCmd(), initCmd())
+	cmd.AddCommand(pathCmd(options), initCmd())
 	return cmd
 }
 
@@ -72,8 +71,7 @@ type cdOptions struct {
 	upstreamRemoteName string
 }
 
-func pathCmd() *cobra.Command {
-	options := &cdOptions{}
+func pathCmd(options *cdOptions) *cobra.Command {
 	cmd := &cobra.Command{
 		DisableFlagsInUseLine: true,
 
@@ -108,7 +106,7 @@ func repositoryArgs(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		if args[1] != "--" {
-			return errors.New("cannot cd: too many arguments\nSeparate git clone flags with '--'.")
+			return errors.New("cannot cd: too many arguments")
 		}
 		return nil
 	}
@@ -116,7 +114,7 @@ func repositoryArgs(cmd *cobra.Command, args []string) error {
 		return errors.New("cannot cd: too many arguments")
 	}
 	if dash < 0 && len(args) > 1 {
-		return errors.New("cannot cd: too many arguments\nSeparate git clone flags with '--'.")
+		return errors.New("cannot cd: too many arguments")
 	}
 	return nil
 }
@@ -126,12 +124,6 @@ func configureRepositoryFlags(cmd *cobra.Command, options *cdOptions, help strin
 	cmd.Flags().BoolVar(&options.mkdir, "mkdir", false, "initialize an empty repository instead of cloning")
 	cmd.Flags().BoolVar(&options.noUpstream, "no-upstream", false, "do not add an upstream remote when cloning a fork")
 	cmd.Flags().StringVarP(&options.upstreamRemoteName, "upstream-remote-name", "u", "", "upstream remote name when cloning a fork")
-	cmd.SetFlagErrorFunc(func(c *cobra.Command, err error) error {
-		if err == pflag.ErrHelp {
-			return err
-		}
-		return fmt.Errorf("%w\nSeparate git clone flags with '--'.", err)
-	})
 }
 
 func resolveRepository(cmd *cobra.Command, args []string, options *cdOptions) (string, error) {
@@ -328,10 +320,19 @@ func cloneOptions(cmd *cobra.Command, options *cdOptions) []string {
 	if options.noUpstream {
 		args = append(args, "--no-upstream")
 	}
-	if cmd.Flags().Changed("upstream-remote-name") {
+	if flagChanged(cmd, "upstream-remote-name") {
 		args = append(args, "--upstream-remote-name", options.upstreamRemoteName)
 	}
 	return args
+}
+
+func flagChanged(cmd *cobra.Command, name string) bool {
+	for current := cmd; current != nil; current = current.Parent() {
+		if current.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func runClone(ctx context.Context, output io.Writer, args ...string) error {
