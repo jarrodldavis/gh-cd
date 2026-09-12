@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -161,20 +162,7 @@ func resolveRepository(cmd *cobra.Command, args []string, options *cdOptions) (s
 		if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
 			return "", fmt.Errorf("cannot cd: failed to create parent directory: %w", err)
 		}
-		remote := parsed.remote.String()
-		ghargs := []string{"repo", "clone", remote, local}
-		ghargs = append(ghargs, cloneOptions(cmd, options)...)
-		dash := cmd.Flags().ArgsLenAtDash()
-		if dash == 1 || (dash == 0 && len(args) > 1) {
-			ghargs = append(ghargs, "--")
-		}
-		if dash == 0 {
-			ghargs = append(ghargs, args[2:]...)
-		} else {
-			ghargs = append(ghargs, args[1:]...)
-		}
-
-		if err := runClone(cmd.Context(), cmd.ErrOrStderr(), ghargs...); err != nil {
+		if err := cloneRepository(cmd, cmd.ErrOrStderr(), parsed, local, args, options); err != nil {
 			return "", err
 		}
 	} else if err != nil {
@@ -189,6 +177,62 @@ func resolveRepository(cmd *cobra.Command, args []string, options *cdOptions) (s
 		return "", fmt.Errorf("cannot cd: failed to configure code review refspecs: %w", err)
 	}
 	return local, nil
+}
+
+func cloneRepository(cmd *cobra.Command, output io.Writer, parsed *parsed, local string, args []string, options *cdOptions) error {
+	remote := parsed.remote.String()
+	gitFlags := forwardedCloneFlags(cmd, args)
+
+	// Explicit transport URLs and SCP-style remotes may point at any Git
+	// server. Let gh identify GitHub.com and GHES repositories; otherwise clone
+	// the remote with Git itself.
+	if shouldUseGitClone(cmd.Context(), parsed.remote) {
+		if len(cloneOptions(cmd, options)) != 0 {
+			return errors.New("cannot cd: --no-upstream and --upstream-remote-name are only supported for GitHub repositories")
+		}
+		if parsed.cloneRemote != "" {
+			remote = parsed.cloneRemote
+		}
+		gitArgs := append([]string{"clone"}, gitFlags...)
+		gitArgs = append(gitArgs, "--", remote, local)
+		return runGitClone(cmd.Context(), output, gitArgs...)
+	}
+
+	ghArgs := []string{"repo", "clone", remote, local}
+	ghArgs = append(ghArgs, cloneOptions(cmd, options)...)
+	if cmd.Flags().ArgsLenAtDash() == 1 || len(gitFlags) > 0 {
+		ghArgs = append(ghArgs, "--")
+	}
+	ghArgs = append(ghArgs, gitFlags...)
+	return runClone(cmd.Context(), output, ghArgs...)
+}
+
+func shouldUseGitClone(ctx context.Context, remote *url.URL) bool {
+	if remote.Scheme == "" {
+		return false
+	}
+	ghPath, err := gh.Path()
+	if err != nil {
+		return true
+	}
+	cmd := exec.CommandContext(ctx, ghPath, "repo", "view", remote.String(), "--json", "name")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run() != nil
+}
+
+func forwardedCloneFlags(cmd *cobra.Command, args []string) []string {
+	if cmd.Flags().ArgsLenAtDash() == 0 {
+		if len(args) <= 2 {
+			return nil
+		}
+		return args[2:]
+	}
+	if len(args) <= 1 {
+		return nil
+	}
+	return args[1:]
 }
 
 func addReviewRefspecs(ctx context.Context, repo string) error {
@@ -349,6 +393,14 @@ func runClone(ctx context.Context, output io.Writer, args ...string) error {
 	}
 
 	cmd := exec.CommandContext(ctx, ghPath, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = output
+	cmd.Stderr = output
+	return cmd.Run()
+}
+
+func runGitClone(ctx context.Context, output io.Writer, args ...string) error {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = output
 	cmd.Stderr = output
