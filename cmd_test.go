@@ -180,6 +180,37 @@ func TestCmdDisambiguatedRepositoryForwardsCloneOptions(t *testing.T) {
 	}
 }
 
+func TestCmdClonesDisambiguatedRepositoryWithoutCloneOptions(t *testing.T) {
+	home := setTestHome(t)
+	logPath := installFakeGH(t)
+	t.Setenv("GH_TOKEN", "test-token")
+	defer gock.Off()
+	gock.New("https://api.github.com/").
+		Get("/user").
+		Reply(200).
+		JSON(map[string]string{"login": "owner"})
+
+	var action bytes.Buffer
+	_, _, err := executeCommand(t, cmdWithAction(&action), "--", "path")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	local := filepath.Join(home, "git", "github.com", "owner", "path")
+	wantCloneArgs := []string{"repo", "clone", "owner/path", local}
+	gotBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotCloneArgs := strings.Split(strings.TrimSuffix(string(gotBytes), "\n"), "\n")
+	if diff := cmp.Diff(wantCloneArgs, gotCloneArgs); diff != "" {
+		t.Fatalf("clone args mismatch (-want +got):\n%s", diff)
+	}
+	if want := "cd\n" + local + "\n"; action.String() != want {
+		t.Fatalf("action = %q, want %q", action.String(), want)
+	}
+}
+
 func TestCmdRejectsNewlineInLocalPath(t *testing.T) {
 	home := setTestHome(t)
 	stdout, _, err := executeTestCmd(t, "path", "https://github.com/owner/repo%0A", "--mkdir")

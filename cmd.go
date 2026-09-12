@@ -224,7 +224,13 @@ func shouldUseGitClone(ctx context.Context, remote *url.URL) bool {
 
 func forwardedCloneFlags(cmd *cobra.Command, args []string) []string {
 	if cmd.Flags().ArgsLenAtDash() == 0 {
+		if len(args) <= 2 {
+			return nil
+		}
 		return args[2:]
+	}
+	if len(args) <= 1 {
+		return nil
 	}
 	return args[1:]
 }
